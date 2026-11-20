@@ -1,0 +1,6 @@
+{
+  "name": "Kế hoạch Tự động hóa",
+  "description": "Ứng dụng quản lý kế hoạch công việc cho nhóm tự động hóa (tối đa 10 thành viên), lưu trữ trực tiếp trên trình duyệt.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
