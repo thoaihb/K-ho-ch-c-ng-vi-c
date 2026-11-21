@@ -2,10 +2,12 @@ import { ChangeEvent, useMemo, useState } from 'react';
 import {
   CheckCircle2,
   Cloud,
+  Database,
   Download,
   FileJson,
   FileSpreadsheet,
   Loader2,
+  RefreshCw,
   Upload,
 } from 'lucide-react';
 import {
@@ -47,6 +49,7 @@ import {
   parseAndValidateBackupJson,
   triggerTextDownload,
 } from '../utils/overtime';
+import { isSupabaseConfigured } from '../services/supabaseClient';
 import { computeSummaryStats, getTodayIsoDate } from '../utils/workplan';
 
 interface SummaryExportViewProps {
@@ -58,6 +61,8 @@ interface SummaryExportViewProps {
   incidents: IncidentEntry[];
   driveAuth?: DriveAuthProps;
   onOpenDriveTab?: () => void;
+  onPullSupabase?: () => Promise<string>;
+  onPushSupabase?: () => Promise<string>;
   onRestoreBackup: (payload: WorkspaceBackupPayload) => void;
 }
 
@@ -70,6 +75,8 @@ export function SummaryExportView({
   incidents,
   driveAuth,
   onOpenDriveTab,
+  onPullSupabase,
+  onPushSupabase,
   onRestoreBackup,
 }: SummaryExportViewProps) {
   const defaultMonth = getMonthKey(getTodayIsoDate());
@@ -81,6 +88,7 @@ export function SummaryExportView({
   const [pendingRestore, setPendingRestore] =
     useState<WorkspaceBackupPayload | null>(null);
   const [isSyncingDrive, setIsSyncingDrive] = useState(false);
+  const [isSyncingDb, setIsSyncingDb] = useState(false);
   const [driveOverwritePrompt, setDriveOverwritePrompt] = useState<{
     existingFile: DriveFile;
     fileName: string;
@@ -716,6 +724,95 @@ export function SummaryExportView({
                 )}
               </div>
             )}
+          </div>
+        )}
+
+        {isSupabaseConfigured() && onPullSupabase && onPushSupabase && (
+          <div className="pt-4 border-t border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-lg bg-emerald-50 border border-emerald-200 flex items-center justify-center shrink-0 mt-0.5">
+                <Database
+                  className="w-4 h-4 text-emerald-700"
+                  aria-hidden="true"
+                />
+              </div>
+              <div>
+                <h4 className="text-sm font-semibold text-slate-900">
+                  Đồng bộ cơ sở dữ liệu Supabase
+                </h4>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Tự động đồng bộ theo từng thao tác. Bạn cũng có thể chủ động
+                  tải dữ liệu mới nhất từ Supabase hoặc đẩy toàn bộ dữ liệu hiện
+                  tại lên bảng Supabase.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+              <button
+                type="button"
+                disabled={isSyncingDb}
+                onClick={async () => {
+                  setIsSyncingDb(true);
+                  setFeedback(null);
+                  try {
+                    const msg = await onPullSupabase();
+                    setFeedback({ type: 'success', message: msg });
+                  } catch (err) {
+                    setFeedback({
+                      type: 'error',
+                      message:
+                        err instanceof Error
+                          ? err.message
+                          : 'Không thể tải dữ liệu từ Supabase.',
+                    });
+                  } finally {
+                    setIsSyncingDb(false);
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition-colors cursor-pointer disabled:opacity-50 whitespace-nowrap"
+              >
+                <RefreshCw
+                  className={`w-3.5 h-3.5 ${isSyncingDb ? 'animate-spin' : ''}`}
+                  aria-hidden="true"
+                />
+                <span>Tải từ Supabase</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={isSyncingDb}
+                onClick={async () => {
+                  setIsSyncingDb(true);
+                  setFeedback(null);
+                  try {
+                    const msg = await onPushSupabase();
+                    setFeedback({ type: 'success', message: msg });
+                  } catch (err) {
+                    setFeedback({
+                      type: 'error',
+                      message:
+                        err instanceof Error
+                          ? err.message
+                          : 'Không thể đẩy dữ liệu lên Supabase.',
+                    });
+                  } finally {
+                    setIsSyncingDb(false);
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors cursor-pointer disabled:opacity-50 whitespace-nowrap"
+              >
+                {isSyncingDb ? (
+                  <Loader2
+                    className="w-3.5 h-3.5 animate-spin"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <Upload className="w-3.5 h-3.5" aria-hidden="true" />
+                )}
+                <span>Đẩy dữ liệu lên Supabase</span>
+              </button>
+            </div>
           </div>
         )}
       </section>
