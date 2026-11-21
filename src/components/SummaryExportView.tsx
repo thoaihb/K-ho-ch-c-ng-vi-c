@@ -1,14 +1,18 @@
 import { ChangeEvent, useMemo, useState } from 'react';
 import {
+  Check,
   CheckCircle2,
   Cloud,
+  Copy,
   Database,
   Download,
+  FileCode2,
   FileJson,
   FileSpreadsheet,
   Loader2,
   RefreshCw,
   Upload,
+  X,
 } from 'lucide-react';
 import {
   DriveAuthProps,
@@ -50,6 +54,7 @@ import {
   triggerTextDownload,
 } from '../utils/overtime';
 import { isSupabaseConfigured } from '../services/supabaseClient';
+import { buildSupabaseInsertSql } from '../services/supabaseSync';
 import { computeSummaryStats, getTodayIsoDate } from '../utils/workplan';
 
 interface SummaryExportViewProps {
@@ -89,6 +94,10 @@ export function SummaryExportView({
     useState<WorkspaceBackupPayload | null>(null);
   const [isSyncingDrive, setIsSyncingDrive] = useState(false);
   const [isSyncingDb, setIsSyncingDb] = useState(false);
+  const [supabaseSqlPreview, setSupabaseSqlPreview] = useState<string | null>(
+    null
+  );
+  const [sqlCopied, setSqlCopied] = useState(false);
   const [driveOverwritePrompt, setDriveOverwritePrompt] = useState<{
     existingFile: DriveFile;
     fileName: string;
@@ -384,6 +393,50 @@ export function SummaryExportView({
       }
     } finally {
       setIsSyncingDrive(false);
+    }
+  };
+
+  const generateCurrentSql = () =>
+    buildSupabaseInsertSql({
+      members,
+      machines,
+      tasks,
+      overtimeEntries,
+      materials,
+      incidents,
+    });
+
+  const handleDownloadSupabaseSql = () => {
+    const sql = generateCurrentSql();
+    triggerTextDownload(
+      `supabase-sync-${getTodayIsoDate()}.sql`,
+      sql,
+      'application/sql;charset=utf-8;'
+    );
+    setFeedback({
+      type: 'success',
+      message:
+        'Đã xuất tệp SQL INSERT chuẩn cho 7 bảng Supabase từ dữ liệu hiện tại.',
+    });
+  };
+
+  const handleOpenSqlPreview = () => {
+    setSqlCopied(false);
+    setSupabaseSqlPreview(generateCurrentSql());
+  };
+
+  const handleCopySqlPreview = async () => {
+    if (!supabaseSqlPreview) return;
+    try {
+      await navigator.clipboard.writeText(supabaseSqlPreview);
+      setSqlCopied(true);
+      setTimeout(() => setSqlCopied(false), 2000);
+    } catch {
+      setFeedback({
+        type: 'error',
+        message:
+          'Không thể tự động sao chép. Vui lòng chọn và nhấn Ctrl+C thủ công.',
+      });
     }
   };
 
@@ -727,94 +780,117 @@ export function SummaryExportView({
           </div>
         )}
 
-        {isSupabaseConfigured() && onPullSupabase && onPushSupabase && (
-          <div className="pt-4 border-t border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex items-start gap-3">
-              <div className="w-9 h-9 rounded-lg bg-emerald-50 border border-emerald-200 flex items-center justify-center shrink-0 mt-0.5">
-                <Database
-                  className="w-4 h-4 text-emerald-700"
-                  aria-hidden="true"
-                />
-              </div>
-              <div>
-                <h4 className="text-sm font-semibold text-slate-900">
-                  Đồng bộ cơ sở dữ liệu Supabase
-                </h4>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Tự động đồng bộ theo từng thao tác. Bạn cũng có thể chủ động
-                  tải dữ liệu mới nhất từ Supabase hoặc đẩy toàn bộ dữ liệu hiện
-                  tại lên bảng Supabase.
-                </p>
-              </div>
+        <div className="pt-4 border-t border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-lg bg-emerald-50 border border-emerald-200 flex items-center justify-center shrink-0 mt-0.5">
+              <Database
+                className="w-4 h-4 text-emerald-700"
+                aria-hidden="true"
+              />
             </div>
-
-            <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-              <button
-                type="button"
-                disabled={isSyncingDb}
-                onClick={async () => {
-                  setIsSyncingDb(true);
-                  setFeedback(null);
-                  try {
-                    const msg = await onPullSupabase();
-                    setFeedback({ type: 'success', message: msg });
-                  } catch (err) {
-                    setFeedback({
-                      type: 'error',
-                      message:
-                        err instanceof Error
-                          ? err.message
-                          : 'Không thể tải dữ liệu từ Supabase.',
-                    });
-                  } finally {
-                    setIsSyncingDb(false);
-                  }
-                }}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition-colors cursor-pointer disabled:opacity-50 whitespace-nowrap"
-              >
-                <RefreshCw
-                  className={`w-3.5 h-3.5 ${isSyncingDb ? 'animate-spin' : ''}`}
-                  aria-hidden="true"
-                />
-                <span>Tải từ Supabase</span>
-              </button>
-
-              <button
-                type="button"
-                disabled={isSyncingDb}
-                onClick={async () => {
-                  setIsSyncingDb(true);
-                  setFeedback(null);
-                  try {
-                    const msg = await onPushSupabase();
-                    setFeedback({ type: 'success', message: msg });
-                  } catch (err) {
-                    setFeedback({
-                      type: 'error',
-                      message:
-                        err instanceof Error
-                          ? err.message
-                          : 'Không thể đẩy dữ liệu lên Supabase.',
-                    });
-                  } finally {
-                    setIsSyncingDb(false);
-                  }
-                }}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors cursor-pointer disabled:opacity-50 whitespace-nowrap"
-              >
-                {isSyncingDb ? (
-                  <Loader2
-                    className="w-3.5 h-3.5 animate-spin"
-                    aria-hidden="true"
-                  />
-                ) : (
-                  <Upload className="w-3.5 h-3.5" aria-hidden="true" />
-                )}
-                <span>Đẩy dữ liệu lên Supabase</span>
-              </button>
+            <div>
+              <h4 className="text-sm font-semibold text-slate-900">
+                Đồng bộ &amp; Xuất SQL cho Supabase (7 bảng)
+              </h4>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {isSupabaseConfigured()
+                  ? 'Tự động đồng bộ theo từng thao tác. Bạn có thể đẩy dữ liệu hiện tại lên Supabase hoặc xuất câu lệnh SQL INSERT chuẩn tên cột.'
+                  : 'Xuất hoặc sao chép câu lệnh SQL INSERT từ dữ liệu hiện tại để chạy trực tiếp trong Supabase SQL Editor cho 7 bảng.'}
+              </p>
             </div>
           </div>
-        )}
+
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+            <button
+              type="button"
+              onClick={handleOpenSqlPreview}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+            >
+              <FileCode2
+                className="w-3.5 h-3.5 text-emerald-700"
+                aria-hidden="true"
+              />
+              <span>Xem &amp; Sao chép SQL</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleDownloadSupabaseSql}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-300 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+            >
+              <Download className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>Tải file .SQL</span>
+            </button>
+
+            {isSupabaseConfigured() && onPullSupabase && onPushSupabase && (
+              <>
+                <button
+                  type="button"
+                  disabled={isSyncingDb}
+                  onClick={async () => {
+                    setIsSyncingDb(true);
+                    setFeedback(null);
+                    try {
+                      const msg = await onPullSupabase();
+                      setFeedback({ type: 'success', message: msg });
+                    } catch (err) {
+                      setFeedback({
+                        type: 'error',
+                        message:
+                          err instanceof Error
+                            ? err.message
+                            : 'Không thể tải dữ liệu từ Supabase.',
+                      });
+                    } finally {
+                      setIsSyncingDb(false);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition-colors cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                >
+                  <RefreshCw
+                    className={`w-3.5 h-3.5 ${isSyncingDb ? 'animate-spin' : ''}`}
+                    aria-hidden="true"
+                  />
+                  <span>Tải từ Supabase</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isSyncingDb}
+                  onClick={async () => {
+                    setIsSyncingDb(true);
+                    setFeedback(null);
+                    try {
+                      const msg = await onPushSupabase();
+                      setFeedback({ type: 'success', message: msg });
+                    } catch (err) {
+                      setFeedback({
+                        type: 'error',
+                        message:
+                          err instanceof Error
+                            ? err.message
+                            : 'Không thể đẩy dữ liệu lên Supabase.',
+                      });
+                    } finally {
+                      setIsSyncingDb(false);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                >
+                  {isSyncingDb ? (
+                    <Loader2
+                      className="w-3.5 h-3.5 animate-spin"
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <Upload className="w-3.5 h-3.5" aria-hidden="true" />
+                  )}
+                  <span>Đẩy dữ liệu lên Supabase</span>
+                </button>
+              </>
+            )}
+          </div>
+        </div>
       </section>
 
       {/* Member Breakdown Table */}
@@ -1023,6 +1099,79 @@ export function SummaryExportView({
                 className="px-4 py-2 text-sm font-semibold text-white bg-[#2563EB] rounded-lg hover:bg-blue-700 cursor-pointer"
               >
                 Ghi đè bản hiện có
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Supabase SQL Export Preview Modal */}
+      {supabaseSqlPreview && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="supabase-sql-modal-title"
+        >
+          <div className="bg-white border border-slate-200 rounded-xl w-full max-w-3xl max-h-[88vh] flex flex-col overflow-hidden shadow-xl">
+            <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between gap-4">
+              <div>
+                <h2
+                  id="supabase-sql-modal-title"
+                  className="text-base font-bold text-slate-900"
+                >
+                  Câu lệnh SQL INSERT cho 7 bảng Supabase
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Được tạo trực tiếp từ dữ liệu hiện có trong ứng dụng / localStorage
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSupabaseSqlPreview(null)}
+                aria-label="Đóng hộp thoại SQL"
+                className="p-1.5 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-md cursor-pointer"
+              >
+                <X className="w-5 h-5" aria-hidden="true" />
+              </button>
+            </div>
+
+            <div className="p-4 flex-1 overflow-hidden flex flex-col">
+              <textarea
+                readOnly
+                value={supabaseSqlPreview}
+                aria-label="Nội dung script SQL Supabase"
+                className="w-full flex-1 min-h-[360px] p-3 text-xs font-mono bg-slate-950 text-slate-100 rounded-lg border border-slate-800 focus:outline-none resize-none"
+              />
+            </div>
+
+            <div className="px-6 py-3.5 border-t border-slate-200 flex flex-wrap items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setSupabaseSqlPreview(null)}
+                className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 cursor-pointer"
+              >
+                Đóng
+              </button>
+              <button
+                type="button"
+                onClick={handleDownloadSupabaseSql}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-slate-700 bg-slate-100 border border-slate-300 rounded-lg hover:bg-slate-200 cursor-pointer"
+              >
+                <Download className="w-4 h-4" aria-hidden="true" />
+                <span>Tải tệp .SQL</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleCopySqlPreview()}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-white bg-emerald-700 rounded-lg hover:bg-emerald-800 cursor-pointer"
+              >
+                {sqlCopied ? (
+                  <Check className="w-4 h-4" aria-hidden="true" />
+                ) : (
+                  <Copy className="w-4 h-4" aria-hidden="true" />
+                )}
+                <span>{sqlCopied ? 'Đã sao chép' : 'Sao chép SQL'}</span>
               </button>
             </div>
           </div>

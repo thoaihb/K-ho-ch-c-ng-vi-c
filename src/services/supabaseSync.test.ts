@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   assembleWorkspaceFromRows,
+  buildSupabaseInsertSql,
   mapAttachmentFromRow,
   mapAttachmentToRow,
   mapIncidentToRow,
@@ -12,9 +13,20 @@ import {
   mapOvertimeFromRow,
   mapOvertimeToRow,
   mapTaskToRow,
+  prepareNormalizedSupabaseRows,
   sanitizeSafeDataUrl,
   sanitizeSafeExternalUrl,
 } from './supabaseSync';
+import { extractMachinesFromTasks } from '../utils/machines';
+import {
+  DEFAULT_INCIDENT_ENTRIES,
+  DEFAULT_MATERIAL_ITEMS,
+} from '../utils/operations';
+import { DEFAULT_OVERTIME_ENTRIES } from '../utils/overtime';
+import {
+  DEFAULT_TEAM_MEMBERS,
+  DEFAULT_WORK_TASKS,
+} from '../utils/workplan';
 
 test('URL sanitizers accept safe http/https/data URLs and reject javascript schemes', () => {
   assert.equal(
@@ -255,3 +267,61 @@ test('assembleWorkspaceFromRows groups attachments into tasks and incidents and 
     'https://drive.google.com/file/d/xyz/view'
   );
 });
+
+test('prepareNormalizedSupabaseRows links default tasks to extracted machines by name and deduplicates codes', () => {
+  const defaultMachines = extractMachinesFromTasks(DEFAULT_WORK_TASKS, '2026-11-20');
+  const prepared = prepareNormalizedSupabaseRows({
+    members: DEFAULT_TEAM_MEMBERS,
+    machines: [
+      ...defaultMachines,
+      {
+        ...defaultMachines[0],
+        id: 'mac-dup',
+        name: 'Máy trùng mã',
+      },
+    ],
+    tasks: DEFAULT_WORK_TASKS,
+    overtimeEntries: DEFAULT_OVERTIME_ENTRIES,
+    materials: DEFAULT_MATERIAL_ITEMS,
+    incidents: DEFAULT_INCIDENT_ENTRIES,
+  });
+
+  assert.equal(prepared.members.length, 6);
+  assert.equal(prepared.machines.length, 7);
+  assert.equal(prepared.machines[6].code, 'MAY-01-2');
+  assert.equal(prepared.tasks[0].machine_id, 'mac-seed-1');
+  assert.equal(prepared.overtimeEntries.length, 5);
+  assert.equal(prepared.materials.length, 5);
+  assert.equal(prepared.incidents.length, 4);
+  assert.equal(prepared.attachments.length, 6);
+});
+
+test('buildSupabaseInsertSql produces valid idempotent INSERT statements for all 7 tables and escapes single quotes', () => {
+  const defaultMachines = extractMachinesFromTasks(DEFAULT_WORK_TASKS, '2026-11-20');
+  const sql = buildSupabaseInsertSql({
+    members: DEFAULT_TEAM_MEMBERS,
+    machines: defaultMachines,
+    tasks: [
+      {
+        ...DEFAULT_WORK_TASKS[0],
+        notes: "Kiểm tra tín hiệu 'E-Stop' trước FAT",
+      },
+    ],
+    overtimeEntries: DEFAULT_OVERTIME_ENTRIES,
+    materials: DEFAULT_MATERIAL_ITEMS,
+    incidents: DEFAULT_INCIDENT_ENTRIES,
+  });
+
+  assert.ok(sql.includes('BEGIN;'));
+  assert.ok(sql.includes('COMMIT;'));
+  assert.ok(sql.includes('INSERT INTO public.team_members (id, name, role)'));
+  assert.ok(sql.includes('INSERT INTO public.machines (id, code, name, description, start_date, status)'));
+  assert.ok(sql.includes('INSERT INTO public.work_tasks (id, created_date, machine_id, main_content, detail_content, target_date, assignee_id, status, progress, notes)'));
+  assert.ok(sql.includes('INSERT INTO public.overtime_entries (id, overtime_date, member_id, hours, day_type, content, notes)'));
+  assert.ok(sql.includes('INSERT INTO public.materials (id, name, spec_code, quantity, unit, machine_id, project_name, status, notes)'));
+  assert.ok(sql.includes('INSERT INTO public.incidents (id, occurred_at, repair_time, machine_id, machine_name, description, resolution, assignee_id, status)'));
+  assert.ok(sql.includes('INSERT INTO public.attachments (id, task_id, incident_id, name, size_bytes, mime_type, external_url, data_url, added_at)'));
+  assert.ok(sql.includes("Kiểm tra tín hiệu ''E-Stop'' trước FAT"));
+  assert.equal(sql.includes('weighted_hours,'), false);
+});
+

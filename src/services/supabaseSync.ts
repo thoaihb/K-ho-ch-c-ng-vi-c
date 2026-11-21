@@ -17,6 +17,7 @@ import {
   TeamMember,
   WorkTask,
 } from '../types/workplan';
+import { findMachineForRecord } from '../utils/machines';
 import { clampProgress, getTodayIsoDate } from '../utils/workplan';
 import { formatSupabaseError, getSupabaseClient } from './supabaseClient';
 
@@ -523,100 +524,441 @@ export async function fetchWorkspaceFromSupabase(): Promise<SupabaseFetchResult 
   });
 }
 
+export interface PreparedSupabaseRows {
+  members: TeamMemberRow[];
+  machines: Omit<MachineRow, 'updated_at'>[];
+  tasks: WorkTaskRow[];
+  overtimeEntries: Omit<OvertimeRow, 'created_at'>[];
+  materials: Omit<MaterialRow, 'updated_at'>[];
+  incidents: IncidentRow[];
+  attachments: AttachmentRow[];
+}
+
+export function prepareNormalizedSupabaseRows(
+  snapshot: WorkspaceSnapshot
+): PreparedSupabaseRows {
+  const seenMemberNames = new Set<string>();
+  const members: TeamMemberRow[] = [];
+  for (const m of snapshot.members) {
+    const row = mapMemberToRow(m);
+    if (!row.name) continue;
+    const key = row.name.toLowerCase();
+    if (seenMemberNames.has(key)) continue;
+    seenMemberNames.add(key);
+    members.push(row);
+  }
+  const validMemberIds = new Set(members.map((m) => m.id));
+
+  const seenMachineCodes = new Set<string>();
+  const normalizedMachines: MachineProject[] = [];
+  const machines: Omit<MachineRow, 'updated_at'>[] = [];
+  for (const mac of snapshot.machines) {
+    const row = mapMachineToRow(mac);
+    if (!row.name) continue;
+    let code = row.code || 'MAY-00';
+    if (seenMachineCodes.has(code.toLowerCase())) {
+      let suffix = 2;
+      while (seenMachineCodes.has(`${code}-${suffix}`.toLowerCase())) {
+        suffix += 1;
+      }
+      code = `${code}-${suffix}`;
+    }
+    seenMachineCodes.add(code.toLowerCase());
+    machines.push({ ...row, code });
+    normalizedMachines.push({ ...mac, code });
+  }
+  const validMachineIds = new Set(machines.map((m) => m.id));
+
+  const tasks: WorkTaskRow[] = [];
+  const validTaskIds = new Set<string>();
+  for (const task of snapshot.tasks) {
+    const resolvedMachine = findMachineForRecord(
+      normalizedMachines,
+      task.machineId,
+      task.mainContent
+    );
+    const enriched: WorkTask = resolvedMachine
+      ? { ...task, machineId: resolvedMachine.id }
+      : task;
+    const row = mapTaskToRow(enriched, validMachineIds, validMemberIds);
+    if (!row.main_content) continue;
+    validTaskIds.add(row.id);
+    tasks.push(row);
+  }
+
+  const overtimeEntries: Omit<OvertimeRow, 'created_at'>[] = snapshot.overtimeEntries
+    .filter((entry) => validMemberIds.has(entry.memberId) && entry.content.trim())
+    .map(mapOvertimeToRow);
+
+  const materials: Omit<MaterialRow, 'updated_at'>[] = [];
+  for (const mat of snapshot.materials) {
+    const resolvedMachine = findMachineForRecord(
+      normalizedMachines,
+      mat.machineId,
+      mat.projectName
+    );
+    const enriched: MaterialItem = resolvedMachine
+      ? { ...mat, machineId: resolvedMachine.id }
+      : mat;
+    const row = mapMaterialToRow(enriched, validMachineIds);
+    if (!row.name || !row.project_name) continue;
+    materials.push(row);
+  }
+
+  const incidents: IncidentRow[] = [];
+  const validIncidentIds = new Set<string>();
+  for (const inc of snapshot.incidents) {
+    const resolvedMachine = findMachineForRecord(
+      normalizedMachines,
+      inc.machineId,
+      inc.machineName
+    );
+    const enriched: IncidentEntry = resolvedMachine
+      ? { ...inc, machineId: resolvedMachine.id }
+      : inc;
+    const row = mapIncidentToRow(enriched, validMachineIds, validMemberIds);
+    if (!row.machine_name || !row.description) continue;
+    validIncidentIds.add(row.id);
+    incidents.push(row);
+  }
+
+  const seenAttachmentIds = new Set<string>();
+  const attachments: AttachmentRow[] = [];
+  for (const task of snapshot.tasks) {
+    if (!validTaskIds.has(task.id)) continue;
+    for (const att of task.attachments) {
+      if (seenAttachmentIds.has(att.id)) continue;
+      seenAttachmentIds.add(att.id);
+      attachments.push(mapAttachmentToRow(att, { taskId: task.id }));
+    }
+  }
+  for (const inc of snapshot.incidents) {
+    if (!validIncidentIds.has(inc.id)) continue;
+    for (const att of inc.attachments) {
+      if (seenAttachmentIds.has(att.id)) continue;
+      seenAttachmentIds.add(att.id);
+      attachments.push(mapAttachmentToRow(att, { incidentId: inc.id }));
+    }
+  }
+
+  return {
+    members,
+    machines,
+    tasks,
+    overtimeEntries,
+    materials,
+    incidents,
+    attachments,
+  };
+}
+
+function sqlLiteral(value: string | number | null | undefined): string {
+  if (value === null || value === undefined) return 'NULL';
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? String(value) : '0';
+  }
+  const clean = String(value).replace(/\0/g, '').replace(/'/g, "''");
+  return `'${clean}'`;
+}
+
+function buildInsertStatement(
+  table: string,
+  columns: string[],
+  rows: Array<Array<string | number | null | undefined>>,
+  updateColumns: string[]
+): string {
+  if (rows.length === 0) {
+    return `-- Không có bản ghi nào trong bảng ${table}`;
+  }
+  const valuesSql = rows
+    .map((cols) => `  (${cols.map(sqlLiteral).join(', ')})`)
+    .join(',\n');
+  const setSql = updateColumns
+    .map((col) => `${col} = EXCLUDED.${col}`)
+    .join(', ');
+
+  return [
+    `INSERT INTO public.${table} (${columns.join(', ')})`,
+    'VALUES',
+    valuesSql,
+    `ON CONFLICT (id) DO UPDATE SET ${setSql};`,
+  ].join('\n');
+}
+
+export function buildSupabaseInsertSql(snapshot: WorkspaceSnapshot): string {
+  const prepared = prepareNormalizedSupabaseRows(snapshot);
+
+  const sections: string[] = [
+    '-- ============================================================================',
+    '-- SCRIPT ĐỒNG BỘ DỮ LIỆU TỪ ỨNG DỤNG "TỰ ĐỘNG HOÁ" LÊN SUPABASE',
+    `-- Tạo lúc: ${getTodayIsoDate()}`,
+    '-- Hướng dẫn: Dán toàn bộ nội dung vào Supabase -> SQL Editor -> Run',
+    '-- ============================================================================',
+    '',
+    'BEGIN;',
+    '',
+    '-- 1. Thành viên nhóm (team_members)',
+    buildInsertStatement(
+      'team_members',
+      ['id', 'name', 'role'],
+      prepared.members.map((r) => [r.id, r.name, r.role]),
+      ['name', 'role']
+    ),
+    '',
+    '-- 2. Danh mục Máy / Dự án (machines)',
+    buildInsertStatement(
+      'machines',
+      ['id', 'code', 'name', 'description', 'start_date', 'status'],
+      prepared.machines.map((r) => [
+        r.id,
+        r.code,
+        r.name,
+        r.description,
+        r.start_date,
+        r.status,
+      ]),
+      ['code', 'name', 'description', 'start_date', 'status']
+    ),
+    '',
+    '-- 3. Kế hoạch công việc (work_tasks)',
+    buildInsertStatement(
+      'work_tasks',
+      [
+        'id',
+        'created_date',
+        'machine_id',
+        'main_content',
+        'detail_content',
+        'target_date',
+        'assignee_id',
+        'status',
+        'progress',
+        'notes',
+      ],
+      prepared.tasks.map((r) => [
+        r.id,
+        r.created_date,
+        r.machine_id,
+        r.main_content,
+        r.detail_content,
+        r.target_date,
+        r.assignee_id,
+        r.status,
+        r.progress,
+        r.notes,
+      ]),
+      [
+        'created_date',
+        'machine_id',
+        'main_content',
+        'detail_content',
+        'target_date',
+        'assignee_id',
+        'status',
+        'progress',
+        'notes',
+      ]
+    ),
+    '',
+    '-- 4. Báo giờ tăng ca (overtime_entries — weighted_hours tự động tính trong DB)',
+    buildInsertStatement(
+      'overtime_entries',
+      ['id', 'overtime_date', 'member_id', 'hours', 'day_type', 'content', 'notes'],
+      prepared.overtimeEntries.map((r) => [
+        r.id,
+        r.overtime_date,
+        r.member_id,
+        Number(r.hours),
+        r.day_type,
+        r.content,
+        r.notes,
+      ]),
+      ['overtime_date', 'member_id', 'hours', 'day_type', 'content', 'notes']
+    ),
+    '',
+    '-- 5. Vật tư & Linh kiện BOM (materials)',
+    buildInsertStatement(
+      'materials',
+      [
+        'id',
+        'name',
+        'spec_code',
+        'quantity',
+        'unit',
+        'machine_id',
+        'project_name',
+        'status',
+        'notes',
+      ],
+      prepared.materials.map((r) => [
+        r.id,
+        r.name,
+        r.spec_code,
+        Number(r.quantity),
+        r.unit,
+        r.machine_id,
+        r.project_name,
+        r.status,
+        r.notes,
+      ]),
+      [
+        'name',
+        'spec_code',
+        'quantity',
+        'unit',
+        'machine_id',
+        'project_name',
+        'status',
+        'notes',
+      ]
+    ),
+    '',
+    '-- 6. Nhật ký sự cố & Xử lý (incidents)',
+    buildInsertStatement(
+      'incidents',
+      [
+        'id',
+        'occurred_at',
+        'repair_time',
+        'machine_id',
+        'machine_name',
+        'description',
+        'resolution',
+        'assignee_id',
+        'status',
+      ],
+      prepared.incidents.map((r) => [
+        r.id,
+        r.occurred_at,
+        r.repair_time,
+        r.machine_id,
+        r.machine_name,
+        r.description,
+        r.resolution,
+        r.assignee_id,
+        r.status,
+      ]),
+      [
+        'occurred_at',
+        'repair_time',
+        'machine_id',
+        'machine_name',
+        'description',
+        'resolution',
+        'assignee_id',
+        'status',
+      ]
+    ),
+    '',
+    '-- 7. File đính kèm (attachments)',
+    buildInsertStatement(
+      'attachments',
+      [
+        'id',
+        'task_id',
+        'incident_id',
+        'name',
+        'size_bytes',
+        'mime_type',
+        'external_url',
+        'data_url',
+        'added_at',
+      ],
+      prepared.attachments.map((r) => [
+        r.id,
+        r.task_id,
+        r.incident_id,
+        r.name,
+        Number(r.size_bytes),
+        r.mime_type,
+        r.external_url,
+        r.data_url,
+        r.added_at,
+      ]),
+      [
+        'task_id',
+        'incident_id',
+        'name',
+        'size_bytes',
+        'mime_type',
+        'external_url',
+        'data_url',
+        'added_at',
+      ]
+    ),
+    '',
+    'COMMIT;',
+  ];
+
+  return sections.join('\n');
+}
+
 export async function pushWorkspaceToSupabase(
   snapshot: WorkspaceSnapshot
 ): Promise<void> {
   const client = getSupabaseClient();
   if (!client) return;
 
-  const validMemberIds = new Set(snapshot.members.map((m) => m.id));
-  const validMachineIds = new Set(snapshot.machines.map((m) => m.id));
+  const prepared = prepareNormalizedSupabaseRows(snapshot);
 
-  if (snapshot.members.length > 0) {
+  if (prepared.members.length > 0) {
     const { error } = await client
       .from('team_members')
-      .upsert(snapshot.members.map(mapMemberToRow), { onConflict: 'id' });
+      .upsert(prepared.members, { onConflict: 'id' });
     if (error) {
       throw new Error(formatSupabaseError(error, 'Lỗi đồng bộ thành viên nhóm'));
     }
   }
 
-  if (snapshot.machines.length > 0) {
+  if (prepared.machines.length > 0) {
     const { error } = await client
       .from('machines')
-      .upsert(snapshot.machines.map(mapMachineToRow), { onConflict: 'id' });
+      .upsert(prepared.machines, { onConflict: 'id' });
     if (error) {
       throw new Error(formatSupabaseError(error, 'Lỗi đồng bộ danh mục máy'));
     }
   }
 
-  if (snapshot.tasks.length > 0) {
+  if (prepared.tasks.length > 0) {
     const { error } = await client
       .from('work_tasks')
-      .upsert(
-        snapshot.tasks.map((t) =>
-          mapTaskToRow(t, validMachineIds, validMemberIds)
-        ),
-        { onConflict: 'id' }
-      );
+      .upsert(prepared.tasks, { onConflict: 'id' });
     if (error) {
       throw new Error(formatSupabaseError(error, 'Lỗi đồng bộ kế hoạch công việc'));
     }
   }
 
-  const validOvertime = snapshot.overtimeEntries.filter((e) =>
-    validMemberIds.has(e.memberId)
-  );
-  if (validOvertime.length > 0) {
+  if (prepared.overtimeEntries.length > 0) {
     const { error } = await client
       .from('overtime_entries')
-      .upsert(validOvertime.map(mapOvertimeToRow), { onConflict: 'id' });
+      .upsert(prepared.overtimeEntries, { onConflict: 'id' });
     if (error) {
       throw new Error(formatSupabaseError(error, 'Lỗi đồng bộ giờ tăng ca'));
     }
   }
 
-  if (snapshot.materials.length > 0) {
+  if (prepared.materials.length > 0) {
     const { error } = await client
       .from('materials')
-      .upsert(
-        snapshot.materials.map((m) => mapMaterialToRow(m, validMachineIds)),
-        { onConflict: 'id' }
-      );
+      .upsert(prepared.materials, { onConflict: 'id' });
     if (error) {
       throw new Error(formatSupabaseError(error, 'Lỗi đồng bộ vật tư linh kiện'));
     }
   }
 
-  if (snapshot.incidents.length > 0) {
+  if (prepared.incidents.length > 0) {
     const { error } = await client
       .from('incidents')
-      .upsert(
-        snapshot.incidents.map((inc) =>
-          mapIncidentToRow(inc, validMachineIds, validMemberIds)
-        ),
-        { onConflict: 'id' }
-      );
+      .upsert(prepared.incidents, { onConflict: 'id' });
     if (error) {
       throw new Error(formatSupabaseError(error, 'Lỗi đồng bộ nhật ký sự cố'));
     }
   }
 
-  const attachmentRows: AttachmentRow[] = [
-    ...snapshot.tasks.flatMap((t) =>
-      t.attachments.map((att) => mapAttachmentToRow(att, { taskId: t.id }))
-    ),
-    ...snapshot.incidents.flatMap((inc) =>
-      inc.attachments.map((att) =>
-        mapAttachmentToRow(att, { incidentId: inc.id })
-      )
-    ),
-  ];
-
-  if (attachmentRows.length > 0) {
+  if (prepared.attachments.length > 0) {
     const { error } = await client
       .from('attachments')
-      .upsert(attachmentRows, { onConflict: 'id' });
+      .upsert(prepared.attachments, { onConflict: 'id' });
     if (error) {
       throw new Error(formatSupabaseError(error, 'Lỗi đồng bộ file đính kèm'));
     }
