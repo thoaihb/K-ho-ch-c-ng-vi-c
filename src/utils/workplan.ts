@@ -30,6 +30,7 @@ export const DEFAULT_WORK_TASKS: WorkTask[] = [
     targetDate: '2026-11-24',
     assigneeId: 'mem-1',
     status: 'Đang thực hiện',
+    progress: 65,
     attachments: [
       {
         id: 'att-1',
@@ -50,6 +51,7 @@ export const DEFAULT_WORK_TASKS: WorkTask[] = [
     targetDate: '2026-11-18',
     assigneeId: 'mem-2',
     status: 'Hoàn thành',
+    progress: 100,
     attachments: [
       {
         id: 'att-2',
@@ -70,6 +72,7 @@ export const DEFAULT_WORK_TASKS: WorkTask[] = [
     targetDate: '2026-11-26',
     assigneeId: 'mem-3',
     status: 'Đang thực hiện',
+    progress: 45,
     attachments: [],
     notes: 'Đang kiểm tra độ ổn định ánh sáng ở tốc độ 60 sản phẩm/phút.',
   },
@@ -82,6 +85,7 @@ export const DEFAULT_WORK_TASKS: WorkTask[] = [
     targetDate: '2026-11-15',
     assigneeId: 'mem-4',
     status: 'Tạm dừng',
+    progress: 30,
     attachments: [
       {
         id: 'att-3',
@@ -102,6 +106,7 @@ export const DEFAULT_WORK_TASKS: WorkTask[] = [
     targetDate: '2026-11-28',
     assigneeId: 'mem-5',
     status: 'Đang thực hiện',
+    progress: 25,
     attachments: [
       {
         id: 'att-4',
@@ -122,6 +127,7 @@ export const DEFAULT_WORK_TASKS: WorkTask[] = [
     targetDate: '2026-11-16',
     assigneeId: 'mem-6',
     status: 'Hoàn thành',
+    progress: 100,
     attachments: [],
     notes: 'Dữ liệu đồng bộ ổn định với độ trễ dưới 500ms.',
   },
@@ -199,6 +205,21 @@ export function filterTasks(
   });
 }
 
+export function clampProgress(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+export function resolveProgressForStatus(
+  currentProgress: number,
+  nextStatus: TaskStatus
+): number {
+  if (nextStatus === 'Hoàn thành') {
+    return 100;
+  }
+  return clampProgress(currentProgress);
+}
+
 export function computeSummaryStats(
   tasks: WorkTask[],
   todayIso: string = getTodayIsoDate()
@@ -207,6 +228,7 @@ export function computeSummaryStats(
   let completed = 0;
   let paused = 0;
   let overdue = 0;
+  let sumProgress = 0;
 
   for (const task of tasks) {
     if (task.status === 'Đang thực hiện') inProgress += 1;
@@ -216,6 +238,8 @@ export function computeSummaryStats(
     if (isTaskOverdue(task, todayIso)) {
       overdue += 1;
     }
+
+    sumProgress += clampProgress(task.progress);
   }
 
   return {
@@ -224,6 +248,8 @@ export function computeSummaryStats(
     completed,
     paused,
     overdue,
+    averageProgress:
+      tasks.length > 0 ? Math.round(sumProgress / tasks.length) : 0,
   };
 }
 
@@ -294,7 +320,9 @@ export function loadTasksFromStorage(storage: StorageLike): WorkTask[] {
     if (!Array.isArray(parsed)) {
       return DEFAULT_WORK_TASKS;
     }
-    return parsed.filter(isValidWorkTask);
+    return parsed
+      .map(normalizeStoredTask)
+      .filter((item): item is WorkTask => item !== null);
   } catch {
     return DEFAULT_WORK_TASKS;
   }
@@ -345,20 +373,43 @@ function isValidTeamMember(item: unknown): item is TeamMember {
   );
 }
 
-function isValidWorkTask(item: unknown): item is WorkTask {
-  if (!item || typeof item !== 'object') return false;
+function normalizeStoredTask(item: unknown): WorkTask | null {
+  if (!item || typeof item !== 'object') return null;
   const candidate = item as Record<string, unknown>;
-  return (
-    typeof candidate.id === 'string' &&
-    typeof candidate.createdAt === 'string' &&
-    typeof candidate.mainContent === 'string' &&
-    typeof candidate.detailContent === 'string' &&
-    typeof candidate.targetDate === 'string' &&
-    typeof candidate.assigneeId === 'string' &&
-    TASK_STATUSES.includes(candidate.status as TaskStatus) &&
-    Array.isArray(candidate.attachments) &&
-    typeof candidate.notes === 'string'
-  );
+  if (
+    typeof candidate.id !== 'string' ||
+    typeof candidate.createdAt !== 'string' ||
+    typeof candidate.mainContent !== 'string' ||
+    typeof candidate.detailContent !== 'string' ||
+    typeof candidate.targetDate !== 'string' ||
+    typeof candidate.assigneeId !== 'string' ||
+    !TASK_STATUSES.includes(candidate.status as TaskStatus) ||
+    !Array.isArray(candidate.attachments) ||
+    typeof candidate.notes !== 'string'
+  ) {
+    return null;
+  }
+
+  const status = candidate.status as TaskStatus;
+  const progress =
+    typeof candidate.progress === 'number' && Number.isFinite(candidate.progress)
+      ? clampProgress(candidate.progress)
+      : status === 'Hoàn thành'
+      ? 100
+      : 0;
+
+  return {
+    id: candidate.id,
+    createdAt: candidate.createdAt,
+    mainContent: candidate.mainContent,
+    detailContent: candidate.detailContent,
+    targetDate: candidate.targetDate,
+    assigneeId: candidate.assigneeId,
+    status,
+    progress,
+    attachments: candidate.attachments,
+    notes: candidate.notes,
+  };
 }
 
 export function createTaskId(): string {

@@ -10,22 +10,45 @@ export function SummaryStrip({ stats }: SummaryStripProps) {
       aria-label="Tổng quan tiến độ"
       className="grid grid-cols-2 lg:grid-cols-4 bg-white border border-slate-200 rounded-lg"
     >
-      <div className="px-4 py-3.5 flex items-start justify-between gap-2 border-r border-b lg:border-b-0 border-slate-200">
-        <div>
-          <p className="text-xs font-medium text-slate-500">Tổng hạng mục</p>
-          <p className="mt-1 text-2xl font-bold font-mono tabular-nums text-slate-900">
-            {stats.total}
-          </p>
+      <div className="px-4 py-3.5 flex flex-col justify-between gap-2.5 border-r border-b lg:border-b-0 border-slate-200">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <p className="text-xs font-medium text-slate-500">Tổng hạng mục</p>
+            <p className="mt-1 text-2xl font-bold font-mono tabular-nums text-slate-900">
+              {stats.total}
+            </p>
+          </div>
+          {stats.overdue > 0 ? (
+            <span className="text-xs font-medium text-red-700 font-mono tabular-nums whitespace-nowrap shrink-0">
+              {stats.overdue} quá hạn
+            </span>
+          ) : (
+            <span className="text-xs text-slate-500 whitespace-nowrap shrink-0">
+              Đúng tiến độ
+            </span>
+          )}
         </div>
-        {stats.overdue > 0 ? (
-          <span className="text-xs font-medium text-red-700 font-mono tabular-nums whitespace-nowrap shrink-0">
-            {stats.overdue} quá hạn
-          </span>
-        ) : (
-          <span className="text-xs text-slate-500 whitespace-nowrap shrink-0">
-            Đúng tiến độ
-          </span>
-        )}
+
+        <div className="space-y-1">
+          <div className="flex items-center justify-between gap-2 text-xs">
+            <span className="text-slate-500">Tiến độ trung bình</span>
+            <span
+              data-testid="average-progress-value"
+              className="font-mono tabular-nums font-semibold text-slate-800"
+            >
+              {stats.averageProgress}%
+            </span>
+          </div>
+          <div
+            className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden"
+            aria-hidden="true"
+          >
+            <div
+              className="h-full bg-blue-600 rounded-full transition-all duration-200"
+              style={{ width: `${stats.averageProgress}%` }}
+            />
+          </div>
+        </div>
       </div>
 
       <div className="px-4 py-3.5 flex items-start justify-between gap-2 border-b lg:border-b-0 lg:border-r border-slate-200">

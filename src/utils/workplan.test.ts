@@ -6,6 +6,7 @@ import {
   MEMBERS_STORAGE_KEY,
   TASKS_STORAGE_KEY,
   addTeamMember,
+  clampProgress,
   computeSummaryStats,
   filterTasks,
   formatDateVi,
@@ -13,6 +14,7 @@ import {
   isTaskOverdue,
   loadMembersFromStorage,
   loadTasksFromStorage,
+  resolveProgressForStatus,
   saveToStorage,
 } from './workplan';
 import { MAX_TEAM_MEMBERS, TeamMember } from '../types/workplan';
@@ -76,7 +78,7 @@ test('filterTasks filters by status, assigneeId, search query, and combinations'
   assert.equal(combined[0].id, 'task-5');
 });
 
-test('computeSummaryStats computes accurate totals and overdue count', () => {
+test('computeSummaryStats computes accurate totals, overdue count, and averageProgress', () => {
   const stats = computeSummaryStats(DEFAULT_WORK_TASKS, '2026-11-20');
   assert.equal(stats.total, 6);
   assert.equal(stats.inProgress, 3);
@@ -84,6 +86,22 @@ test('computeSummaryStats computes accurate totals and overdue count', () => {
   assert.equal(stats.paused, 1);
   // task-4 targetDate is 2026-11-15 with status Tạm dừng -> overdue
   assert.equal(stats.overdue, 1);
+  // (65 + 100 + 45 + 30 + 25 + 100) / 6 = 60.83 -> 61
+  assert.equal(stats.averageProgress, 61);
+
+  const emptyStats = computeSummaryStats([], '2026-11-20');
+  assert.equal(emptyStats.averageProgress, 0);
+});
+
+test('clampProgress and resolveProgressForStatus enforce 0..100 and Hoàn thành -> 100%', () => {
+  assert.equal(clampProgress(-10), 0);
+  assert.equal(clampProgress(120), 100);
+  assert.equal(clampProgress(42.6), 43);
+  assert.equal(clampProgress(Number.NaN), 0);
+
+  assert.equal(resolveProgressForStatus(35, 'Hoàn thành'), 100);
+  assert.equal(resolveProgressForStatus(100, 'Đang thực hiện'), 100);
+  assert.equal(resolveProgressForStatus(45, 'Tạm dừng'), 45);
 });
 
 test('addTeamMember enforces max 10 members, rejects empty and duplicate names', () => {
@@ -137,4 +155,35 @@ test('storage helpers load defaults on empty/corrupt data and persist round-trip
   const saveRes = saveToStorage(mockStorage, TASKS_STORAGE_KEY, customTasks);
   assert.equal(saveRes.ok, true);
   assert.equal(loadTasksFromStorage(mockStorage).length, 1);
+
+  // Legacy tasks without progress field: Hoàn thành -> 100, others -> 0
+  const legacyTasks = [
+    {
+      id: 'legacy-1',
+      createdAt: '2026-11-01',
+      mainContent: 'Hạng mục cũ hoàn thành',
+      detailContent: '',
+      targetDate: '2026-11-10',
+      assigneeId: 'mem-1',
+      status: 'Hoàn thành',
+      attachments: [],
+      notes: '',
+    },
+    {
+      id: 'legacy-2',
+      createdAt: '2026-11-02',
+      mainContent: 'Hạng mục cũ đang làm',
+      detailContent: '',
+      targetDate: '2026-11-25',
+      assigneeId: 'mem-2',
+      status: 'Đang thực hiện',
+      attachments: [],
+      notes: '',
+    },
+  ];
+  map.set(TASKS_STORAGE_KEY, JSON.stringify(legacyTasks));
+  const migrated = loadTasksFromStorage(mockStorage);
+  assert.equal(migrated.length, 2);
+  assert.equal(migrated[0].progress, 100);
+  assert.equal(migrated[1].progress, 0);
 });

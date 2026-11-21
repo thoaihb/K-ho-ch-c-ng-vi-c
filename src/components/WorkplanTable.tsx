@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   AlertCircle,
   Check,
@@ -15,12 +16,14 @@ import {
   WorkTask,
 } from '../types/workplan';
 import { formatDateVi, formatFileSize, isTaskOverdue } from '../utils/workplan';
+import { ProgressControl } from './ProgressControl';
 
 interface WorkplanTableProps {
   tasks: WorkTask[];
   totalTaskCount: number;
   members: TeamMember[];
   onStatusChange: (taskId: string, status: TaskStatus) => void;
+  onProgressChange: (taskId: string, progress: number) => void;
   onEditTask: (task: WorkTask) => void;
   onDeleteTask: (task: WorkTask) => void;
   onPreviewAttachment: (attachment: AttachmentItem) => void;
@@ -46,12 +49,16 @@ export function WorkplanTable({
   totalTaskCount,
   members,
   onStatusChange,
+  onProgressChange,
   onEditTask,
   onDeleteTask,
   onPreviewAttachment,
   onOpenAddModal,
   onResetFilter,
 }: WorkplanTableProps) {
+  const [openProgressTaskId, setOpenProgressTaskId] = useState<string | null>(
+    null
+  );
   const memberMap = new Map(members.map((m) => [m.id, m]));
 
   if (tasks.length === 0) {
@@ -99,34 +106,37 @@ export function WorkplanTable({
         <table className="w-full border-collapse text-left text-sm">
           <thead>
             <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
-              <th scope="col" className="py-3 px-3 text-center w-12">
+              <th scope="col" className="py-3 px-2 text-center w-10">
                 STT
               </th>
-              <th scope="col" className="py-3 px-3 w-28 whitespace-nowrap">
+              <th scope="col" className="py-3 px-2 w-[86px] whitespace-nowrap">
                 Ngày tạo
               </th>
-              <th scope="col" className="py-3 px-3 min-w-[170px]">
+              <th scope="col" className="py-3 px-2 min-w-[130px] w-[14%]">
                 Nội dung chính
               </th>
-              <th scope="col" className="py-3 px-3 min-w-[210px]">
+              <th scope="col" className="py-3 px-2 min-w-[145px] w-[17%]">
                 Nội dung chi tiết
               </th>
-              <th scope="col" className="py-3 px-3 w-32 whitespace-nowrap">
+              <th scope="col" className="py-3 px-2 w-[92px]">
                 Kế hoạch hoàn thành
               </th>
-              <th scope="col" className="py-3 px-3 w-40">
+              <th scope="col" className="py-3 px-2 w-[116px]">
                 Người đảm nhận
               </th>
-              <th scope="col" className="py-3 px-3 w-44">
+              <th scope="col" className="py-3 px-2 w-[124px]">
                 Trạng thái
               </th>
-              <th scope="col" className="py-3 px-3 w-44">
+              <th scope="col" className="py-3 px-2 w-[92px] whitespace-nowrap">
+                Tiến độ (%)
+              </th>
+              <th scope="col" className="py-3 px-2 w-[114px]">
                 File đính kèm
               </th>
-              <th scope="col" className="py-3 px-3 min-w-[160px]">
+              <th scope="col" className="py-3 px-2 min-w-[110px]">
                 Ghi chú
               </th>
-              <th scope="col" className="py-3 px-3 text-right w-24">
+              <th scope="col" className="py-3 px-2 text-right w-[68px] whitespace-nowrap">
                 Thao tác
               </th>
             </tr>
@@ -143,23 +153,23 @@ export function WorkplanTable({
                   data-testid={`task-row-${task.id}`}
                   className="align-top hover:bg-slate-50/70 transition-colors"
                 >
-                  <td className="py-3.5 px-3 text-center font-mono tabular-nums text-xs font-semibold text-slate-500">
+                  <td className="py-3 px-2 text-center font-mono tabular-nums text-xs font-semibold text-slate-500">
                     {rowNumber}
                   </td>
 
-                  <td className="py-3.5 px-3 font-mono tabular-nums text-xs text-slate-600 whitespace-nowrap">
+                  <td className="py-3 px-2 font-mono tabular-nums text-xs text-slate-600 whitespace-nowrap">
                     {formatDateVi(task.createdAt)}
                   </td>
 
-                  <td className="py-3.5 px-3 font-semibold text-slate-900 leading-snug">
+                  <td className="py-3 px-2 text-[13px] font-semibold text-slate-900 leading-snug">
                     {task.mainContent}
                   </td>
 
-                  <td className="py-3.5 px-3 text-slate-600 text-xs leading-relaxed whitespace-pre-line">
+                  <td className="py-3 px-2 text-slate-600 text-xs leading-relaxed whitespace-pre-line">
                     {task.detailContent || '—'}
                   </td>
 
-                  <td className="py-3.5 px-3 whitespace-nowrap">
+                  <td className="py-3 px-2 whitespace-nowrap">
                     <div className="font-mono tabular-nums text-xs text-slate-800">
                       {formatDateVi(task.targetDate)}
                     </div>
@@ -171,13 +181,13 @@ export function WorkplanTable({
                     )}
                   </td>
 
-                  <td className="py-3.5 px-3">
+                  <td className="py-3 px-2">
                     {assignee ? (
                       <div>
-                        <div className="text-sm font-medium text-slate-900">
+                        <div className="text-[13px] font-medium text-slate-900 leading-snug">
                           {assignee.name}
                         </div>
-                        <div className="text-xs text-slate-500">
+                        <div className="text-[11px] text-slate-500 leading-snug mt-0.5">
                           {assignee.role}
                         </div>
                       </div>
@@ -186,7 +196,7 @@ export function WorkplanTable({
                     )}
                   </td>
 
-                  <td className="py-2.5 px-2.5">
+                  <td className="py-2.5 px-2">
                     <div
                       role="radiogroup"
                       aria-label={`Trạng thái của ${task.mainContent}`}
@@ -201,15 +211,15 @@ export function WorkplanTable({
                             role="radio"
                             aria-checked={selected}
                             onClick={() => onStatusChange(task.id, status)}
-                            className={`w-full flex items-center gap-1.5 px-2 py-1 text-xs rounded border text-left transition-colors cursor-pointer whitespace-nowrap focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-blue-700 ${getStatusOptionStyle(
+                            className={`w-full flex items-center gap-1 px-1.5 py-1 text-[11px] rounded border text-left transition-colors cursor-pointer whitespace-nowrap focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-blue-700 ${getStatusOptionStyle(
                               status,
                               selected
                             )}`}
                           >
                             {selected ? (
-                              <Check className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                              <Check className="w-3 h-3 shrink-0" aria-hidden="true" />
                             ) : (
-                              <Circle className="w-3.5 h-3.5 shrink-0 text-slate-300" aria-hidden="true" />
+                              <Circle className="w-3 h-3 shrink-0 text-slate-300" aria-hidden="true" />
                             )}
                             <span>{status}</span>
                           </button>
@@ -218,7 +228,21 @@ export function WorkplanTable({
                     </div>
                   </td>
 
-                  <td className="py-3.5 px-3">
+                  <td className="py-3 px-2">
+                    <ProgressControl
+                      taskId={task.id}
+                      taskName={task.mainContent}
+                      status={task.status}
+                      progress={task.progress}
+                      isOpen={openProgressTaskId === `desktop-${task.id}`}
+                      onToggleOpen={(id) =>
+                        setOpenProgressTaskId(id ? `desktop-${id}` : null)
+                      }
+                      onChangeProgress={onProgressChange}
+                    />
+                  </td>
+
+                  <td className="py-3 px-2">
                     {task.attachments.length === 0 ? (
                       <span className="text-xs text-slate-400">Không có</span>
                     ) : (
@@ -228,11 +252,11 @@ export function WorkplanTable({
                             <button
                               type="button"
                               onClick={() => onPreviewAttachment(att)}
-                              className="w-full text-left inline-flex items-start gap-1.5 text-xs text-blue-700 hover:text-blue-900 hover:underline cursor-pointer"
+                              className="w-full text-left inline-flex items-start gap-1 text-xs text-blue-700 hover:text-blue-900 hover:underline cursor-pointer"
                               title={`${att.name} (${formatFileSize(att.size)})`}
                             >
                               <Paperclip
-                                className="w-3.5 h-3.5 mt-0.5 shrink-0 text-slate-400"
+                                className="w-3 h-3 mt-0.5 shrink-0 text-slate-400"
                                 aria-hidden="true"
                               />
                               <span className="min-w-0 flex flex-col">
@@ -250,17 +274,17 @@ export function WorkplanTable({
                     )}
                   </td>
 
-                  <td className="py-3.5 px-3 text-xs text-slate-600 leading-relaxed whitespace-pre-line">
+                  <td className="py-3 px-2 text-xs text-slate-600 leading-relaxed whitespace-pre-line">
                     {task.notes || '—'}
                   </td>
 
-                  <td className="py-3 px-3 text-right whitespace-nowrap">
-                    <div className="inline-flex items-center justify-end gap-1">
+                  <td className="py-2.5 px-2 text-right whitespace-nowrap">
+                    <div className="inline-flex items-center justify-end gap-0.5">
                       <button
                         type="button"
                         onClick={() => onEditTask(task)}
                         aria-label={`Sửa "${task.mainContent}"`}
-                        className="p-2 text-slate-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors cursor-pointer"
+                        className="p-1.5 text-slate-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors cursor-pointer"
                       >
                         <Pencil className="w-4 h-4" aria-hidden="true" />
                       </button>
@@ -268,7 +292,7 @@ export function WorkplanTable({
                         type="button"
                         onClick={() => onDeleteTask(task)}
                         aria-label={`Xóa "${task.mainContent}"`}
-                        className="p-2 text-slate-600 hover:text-red-700 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
+                        className="p-1.5 text-slate-600 hover:text-red-700 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
                       >
                         <Trash2 className="w-4 h-4" aria-hidden="true" />
                       </button>
@@ -381,6 +405,23 @@ export function WorkplanTable({
                     );
                   })}
                 </div>
+              </div>
+
+              <div>
+                <span className="text-xs text-slate-500 block mb-1.5">
+                  Tiến độ (%)
+                </span>
+                <ProgressControl
+                  taskId={task.id}
+                  taskName={task.mainContent}
+                  status={task.status}
+                  progress={task.progress}
+                  isOpen={openProgressTaskId === `mobile-${task.id}`}
+                  onToggleOpen={(id) =>
+                    setOpenProgressTaskId(id ? `mobile-${id}` : null)
+                  }
+                  onChangeProgress={onProgressChange}
+                />
               </div>
 
               {task.attachments.length > 0 && (

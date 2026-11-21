@@ -7,7 +7,12 @@ import {
   TeamMember,
   WorkTask,
 } from '../types/workplan';
-import { formatFileSize, getTodayIsoDate } from '../utils/workplan';
+import {
+  clampProgress,
+  formatFileSize,
+  getTodayIsoDate,
+  resolveProgressForStatus,
+} from '../utils/workplan';
 
 interface TaskFormModalProps {
   isOpen: boolean;
@@ -32,6 +37,7 @@ export function TaskFormModal({
   const [targetDate, setTargetDate] = useState('');
   const [assigneeId, setAssigneeId] = useState('');
   const [status, setStatus] = useState<TaskStatus>('Đang thực hiện');
+  const [progress, setProgress] = useState<number>(0);
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
   const [notes, setNotes] = useState('');
   const [customFileName, setCustomFileName] = useState('');
@@ -47,6 +53,7 @@ export function TaskFormModal({
       setTargetDate(editingTask.targetDate);
       setAssigneeId(editingTask.assigneeId);
       setStatus(editingTask.status);
+      setProgress(clampProgress(editingTask.progress));
       setAttachments(editingTask.attachments);
       setNotes(editingTask.notes);
     } else {
@@ -56,6 +63,7 @@ export function TaskFormModal({
       setTargetDate('');
       setAssigneeId(members[0]?.id ?? '');
       setStatus('Đang thực hiện');
+      setProgress(0);
       setAttachments([]);
       setNotes('');
     }
@@ -168,6 +176,7 @@ export function TaskFormModal({
         targetDate,
         assigneeId,
         status,
+        progress: clampProgress(progress),
         attachments,
         notes: notes.trim(),
       },
@@ -321,7 +330,12 @@ export function TaskFormModal({
                       type="button"
                       role="radio"
                       aria-checked={selected}
-                      onClick={() => setStatus(option)}
+                      onClick={() => {
+                        setStatus(option);
+                        setProgress((prev) =>
+                          resolveProgressForStatus(prev, option)
+                        );
+                      }}
                       className={`h-10 px-2 flex items-center justify-center gap-1 text-xs rounded-lg border transition-colors cursor-pointer whitespace-nowrap ${
                         selected
                           ? 'bg-blue-50 border-blue-600 text-blue-800 font-semibold'
@@ -337,6 +351,52 @@ export function TaskFormModal({
                     </button>
                   );
                 })}
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <label
+                htmlFor="task-progress-range"
+                className="text-xs font-semibold text-slate-700"
+              >
+                Tiến độ hoàn thành (%)
+              </label>
+              <span className="text-xs font-mono tabular-nums font-semibold text-blue-700">
+                {progress}%
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              <input
+                id="task-progress-range"
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={progress}
+                onChange={(e) => setProgress(clampProgress(Number(e.target.value)))}
+                className="flex-1 h-2 accent-blue-700 cursor-pointer"
+              />
+              <div className="flex items-center gap-1 shrink-0">
+                <input
+                  id="task-progress-number"
+                  type="number"
+                  aria-label="Nhập phần trăm tiến độ"
+                  min={0}
+                  max={100}
+                  value={progress}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === '') {
+                      setProgress(0);
+                      return;
+                    }
+                    setProgress(clampProgress(Number(raw)));
+                  }}
+                  className="w-16 h-9 px-2 text-sm font-mono tabular-nums text-right bg-white border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-700/20 focus:border-blue-700"
+                />
+                <span className="text-xs font-mono text-slate-500">%</span>
               </div>
             </div>
           </div>

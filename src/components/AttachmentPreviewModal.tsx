@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Download, FileText, X } from 'lucide-react';
 import { AttachmentItem } from '../types/workplan';
 import { formatDateVi, formatFileSize } from '../utils/workplan';
@@ -11,10 +12,21 @@ export function AttachmentPreviewModal({
   attachment,
   onClose,
 }: AttachmentPreviewModalProps) {
+  useEffect(() => {
+    if (!attachment) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [attachment, onClose]);
+
   if (!attachment) return null;
 
   const isImage =
     attachment.dataUrl && attachment.mimeType.startsWith('image/');
+  const isPdf =
+    attachment.dataUrl && attachment.mimeType === 'application/pdf';
 
   return (
     <div
@@ -23,7 +35,7 @@ export function AttachmentPreviewModal({
       aria-modal="true"
       aria-labelledby="attachment-modal-title"
     >
-      <div className="bg-white border border-slate-200 rounded-xl w-full max-w-lg overflow-hidden">
+      <div className="bg-white border border-slate-200 rounded-xl w-full max-w-xl overflow-hidden shadow-xl">
         <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between gap-4">
           <h2
             id="attachment-modal-title"
@@ -64,7 +76,17 @@ export function AttachmentPreviewModal({
                 src={attachment.dataUrl}
                 alt={attachment.name}
                 referrerPolicy="no-referrer"
-                className="max-h-64 w-full object-contain"
+                className="max-h-72 w-full object-contain"
+              />
+            </div>
+          )}
+
+          {isPdf && (
+            <div className="border border-slate-200 rounded-lg overflow-hidden bg-slate-50">
+              <iframe
+                src={attachment.dataUrl}
+                title={attachment.name}
+                className="w-full h-72 bg-white"
               />
             </div>
           )}
