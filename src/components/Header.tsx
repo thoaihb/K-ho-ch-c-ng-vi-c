@@ -4,27 +4,33 @@ import { AppSection } from '../types/workplan';
 interface HeaderProps {
   activeSection: AppSection;
   memberCount: number;
+  isDriveConnected: boolean;
   onOpenMobileMenu: () => void;
   onOpenTeamModal: () => void;
   onQuickAdd: () => void;
 }
 
 const SECTION_TITLES: Record<AppSection, string> = {
+  machines: 'Danh mục Máy / Dự án',
   workplan: 'Kế hoạch công việc',
   overtime: 'Báo giờ tăng ca',
   materials: 'Vật tư & Linh kiện',
   incidents: 'Nhật ký sự cố & Xử lý',
+  drive: 'Google Drive',
   summary: 'Tổng hợp & Xuất dữ liệu',
 };
 
 export function Header({
   activeSection,
   memberCount,
+  isDriveConnected,
   onOpenMobileMenu,
   onOpenTeamModal,
   onQuickAdd,
 }: HeaderProps) {
-  const showQuickAdd = activeSection !== 'summary';
+  const showQuickAdd =
+    activeSection !== 'summary' &&
+    (activeSection !== 'drive' || isDriveConnected);
 
   return (
     <header className="bg-white border-b border-slate-200 shadow-[0_1px_2px_rgba(15,23,42,0.04)] shrink-0 sticky top-0 z-30">

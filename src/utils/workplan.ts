@@ -1,5 +1,6 @@
 import {
   MAX_TEAM_MEMBERS,
+  MachineProject,
   SummaryStats,
   TASK_STATUSES,
   TaskFilter,
@@ -7,6 +8,7 @@ import {
   TeamMember,
   WorkTask,
 } from '../types/workplan';
+import { matchesMachineFilter } from './machines';
 
 export const TASKS_STORAGE_KEY = 'automation_team_workplan_tasks_v1';
 export const MEMBERS_STORAGE_KEY = 'automation_team_workplan_members_v1';
@@ -174,7 +176,8 @@ export function formatFileSize(bytes: number): string {
 export function filterTasks(
   tasks: WorkTask[],
   filter: TaskFilter,
-  members: TeamMember[] = []
+  members: TeamMember[] = [],
+  machines: MachineProject[] = []
 ): WorkTask[] {
   const normalizedQuery = filter.search.trim().toLowerCase();
   const memberNameMap = new Map(members.map((m) => [m.id, m.name.toLowerCase()]));
@@ -184,6 +187,18 @@ export function filterTasks(
       return false;
     }
     if (filter.assigneeId !== 'all' && task.assigneeId !== filter.assigneeId) {
+      return false;
+    }
+    if (
+      filter.machineId &&
+      filter.machineId !== 'all' &&
+      !matchesMachineFilter(
+        filter.machineId,
+        machines,
+        task.machineId,
+        task.mainContent
+      )
+    ) {
       return false;
     }
     if (normalizedQuery) {
@@ -401,6 +416,9 @@ function normalizeStoredTask(item: unknown): WorkTask | null {
   return {
     id: candidate.id,
     createdAt: candidate.createdAt,
+    ...(typeof candidate.machineId === 'string' && candidate.machineId
+      ? { machineId: candidate.machineId }
+      : {}),
     mainContent: candidate.mainContent,
     detailContent: candidate.detailContent,
     targetDate: candidate.targetDate,

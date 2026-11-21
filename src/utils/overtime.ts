@@ -1,6 +1,7 @@
 import {
   IncidentEntry,
   MAX_TEAM_MEMBERS,
+  MachineProject,
   MaterialItem,
   MemberSummaryRow,
   OVERTIME_DAY_TYPES,
@@ -15,6 +16,10 @@ import {
   WorkTask,
   WorkspaceBackupPayload,
 } from '../types/workplan';
+import {
+  extractMachinesFromTasks,
+  normalizeStoredMachine,
+} from './machines';
 import {
   normalizeStoredIncident,
   normalizeStoredMaterial,
@@ -361,12 +366,14 @@ export function buildBackupJson(
   overtimeEntries: OvertimeEntry[],
   nowIso: string = getTodayIsoDate(),
   materials: MaterialItem[] = [],
-  incidents: IncidentEntry[] = []
+  incidents: IncidentEntry[] = [],
+  machines: MachineProject[] = []
 ): string {
   const payload: WorkspaceBackupPayload = {
-    version: 2,
+    version: 3,
     exportedAt: nowIso,
     members,
+    machines,
     tasks,
     overtimeEntries,
     materials,
@@ -445,6 +452,9 @@ export function parseAndValidateBackupJson(rawText: string): {
       validTasks.push({
         id: t.id,
         createdAt: t.createdAt,
+        ...(typeof t.machineId === 'string' && t.machineId
+          ? { machineId: t.machineId }
+          : {}),
         mainContent: t.mainContent,
         detailContent: t.detailContent,
         targetDate: t.targetDate,
@@ -472,6 +482,12 @@ export function parseAndValidateBackupJson(rawText: string): {
           .filter((item): item is IncidentEntry => item !== null)
       : undefined;
 
+    const validMachines = Array.isArray(parsed.machines)
+      ? parsed.machines
+          .map(normalizeStoredMachine)
+          .filter((item): item is MachineProject => item !== null)
+      : extractMachinesFromTasks(validTasks);
+
     return {
       ok: true,
       data: {
@@ -481,6 +497,7 @@ export function parseAndValidateBackupJson(rawText: string): {
             ? parsed.exportedAt
             : getTodayIsoDate(),
         members: validMembers,
+        machines: validMachines,
         tasks: validTasks,
         overtimeEntries: validOvertime,
         ...(validMaterials ? { materials: validMaterials } : {}),

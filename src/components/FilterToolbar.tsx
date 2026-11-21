@@ -1,5 +1,6 @@
 import { RotateCcw, Search } from 'lucide-react';
 import {
+  MachineProject,
   TASK_STATUSES,
   TaskFilter,
   TaskStatus,
@@ -9,6 +10,7 @@ import {
 interface FilterToolbarProps {
   filter: TaskFilter;
   members: TeamMember[];
+  machines: MachineProject[];
   totalCount: number;
   filteredCount: number;
   onChangeFilter: (next: TaskFilter) => void;
@@ -23,6 +25,7 @@ const STATUS_OPTIONS: Array<{ value: 'all' | TaskStatus; label: string }> = [
 export function FilterToolbar({
   filter,
   members,
+  machines,
   totalCount,
   filteredCount,
   onChangeFilter,
@@ -31,12 +34,13 @@ export function FilterToolbar({
   const hasActiveFilter =
     filter.status !== 'all' ||
     filter.assigneeId !== 'all' ||
+    filter.machineId !== 'all' ||
     filter.search.trim().length > 0;
 
   return (
     <section
       aria-label="Bộ lọc công việc"
-      className="bg-white border border-slate-200 rounded-lg p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3"
+      className="bg-white border border-slate-200 rounded-lg p-4 flex flex-col xl:flex-row xl:items-center justify-between gap-3"
     >
       <div className="flex flex-wrap items-center gap-3">
         <div
@@ -68,6 +72,30 @@ export function FilterToolbar({
 
         <div className="flex items-center gap-2">
           <label
+            htmlFor="filter-machine"
+            className="text-xs font-medium text-slate-600 whitespace-nowrap"
+          >
+            Máy / Dự án:
+          </label>
+          <select
+            id="filter-machine"
+            value={filter.machineId}
+            onChange={(e) =>
+              onChangeFilter({ ...filter, machineId: e.target.value })
+            }
+            className="h-9 max-w-[240px] px-3 text-sm bg-white border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-700/20 focus:border-blue-700"
+          >
+            <option value="all">Tất cả máy / dự án</option>
+            {machines.map((machine) => (
+              <option key={machine.id} value={machine.id}>
+                {machine.code} — {machine.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <label
             htmlFor="filter-assignee"
             className="text-xs font-medium text-slate-600 whitespace-nowrap"
           >
@@ -92,7 +120,7 @@ export function FilterToolbar({
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 sm:w-64 sm:flex-initial">
+        <div className="relative flex-1 sm:w-60 sm:flex-initial">
           <Search
             className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
             aria-hidden="true"

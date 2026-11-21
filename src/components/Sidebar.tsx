@@ -1,10 +1,12 @@
 import { useEffect } from 'react';
 import {
   BarChart3,
+  Boxes,
   ChevronLeft,
   ChevronRight,
   ClipboardList,
   Clock,
+  Cloud,
   Cpu,
   Package,
   Users,
@@ -29,10 +31,12 @@ const NAV_ITEMS: Array<{
   label: string;
   icon: typeof ClipboardList;
 }> = [
+  { id: 'machines', label: 'Danh mục Máy / Dự án', icon: Boxes },
   { id: 'workplan', label: 'Kế hoạch công việc', icon: ClipboardList },
   { id: 'overtime', label: 'Báo giờ tăng ca', icon: Clock },
   { id: 'materials', label: 'Vật tư & Linh kiện', icon: Package },
   { id: 'incidents', label: 'Nhật ký sự cố & Xử lý', icon: Wrench },
+  { id: 'drive', label: 'Google Drive', icon: Cloud },
   { id: 'summary', label: 'Tổng hợp & Xuất dữ liệu', icon: BarChart3 },
 ];
 

@@ -1,16 +1,25 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { Check, Circle, X } from 'lucide-react';
 import {
   MATERIAL_STATUSES,
+  MachineProject,
   MaterialItem,
   MaterialStatus,
 } from '../types/workplan';
+import { findMachineForRecord } from '../utils/machines';
 import { getTodayIsoDate } from '../utils/workplan';
+import {
+  MachineSelectWithQuickAdd,
+  QuickAddMachineInput,
+} from './MachineSelectWithQuickAdd';
 
 interface MaterialFormModalProps {
   isOpen: boolean;
   editingItem: MaterialItem | null;
+  defaultMachineId?: string;
+  machines: MachineProject[];
   onClose: () => void;
+  onQuickCreateMachine: (data: QuickAddMachineInput) => MachineProject;
   onSave: (
     data: Omit<MaterialItem, 'id' | 'updatedAt'>,
     existingId?: string
@@ -20,39 +29,57 @@ interface MaterialFormModalProps {
 export function MaterialFormModal({
   isOpen,
   editingItem,
+  defaultMachineId,
+  machines,
   onClose,
+  onQuickCreateMachine,
   onSave,
 }: MaterialFormModalProps) {
   const [name, setName] = useState('');
   const [specCode, setSpecCode] = useState('');
   const [quantity, setQuantity] = useState('1');
   const [unit, setUnit] = useState('Cái');
+  const [machineId, setMachineId] = useState('');
   const [projectName, setProjectName] = useState('');
   const [status, setStatus] = useState<MaterialStatus>('Cần đặt');
   const [notes, setNotes] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
 
+  const machinesRef = useRef(machines);
+  machinesRef.current = machines;
+
   useEffect(() => {
     if (!isOpen) return;
+    const currentMachines = machinesRef.current;
     if (editingItem) {
+      const matched = findMachineForRecord(
+        currentMachines,
+        editingItem.machineId,
+        editingItem.projectName
+      );
       setName(editingItem.name);
       setSpecCode(editingItem.specCode);
       setQuantity(String(editingItem.quantity));
       setUnit(editingItem.unit);
-      setProjectName(editingItem.projectName);
+      setMachineId(matched?.id ?? editingItem.machineId ?? '');
+      setProjectName(matched?.name ?? editingItem.projectName);
       setStatus(editingItem.status);
       setNotes(editingItem.notes);
     } else {
+      const preselected = defaultMachineId
+        ? currentMachines.find((m) => m.id === defaultMachineId)
+        : undefined;
       setName('');
       setSpecCode('');
       setQuantity('1');
       setUnit('Cái');
-      setProjectName('');
+      setMachineId(preselected?.id ?? '');
+      setProjectName(preselected?.name ?? '');
       setStatus('Cần đặt');
       setNotes('');
     }
     setErrors({});
-  }, [isOpen, editingItem]);
+  }, [isOpen, editingItem, defaultMachineId]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -80,7 +107,7 @@ export function MaterialFormModal({
       nextErrors.quantity = 'Số lượng phải lớn hơn 0.';
     }
     if (!projectName.trim()) {
-      nextErrors.projectName = 'Vui lòng nhập tên dự án hoặc cụm máy áp dụng.';
+      nextErrors.projectName = 'Vui lòng chọn dự án hoặc máy áp dụng.';
     }
 
     if (Object.keys(nextErrors).length > 0) {
@@ -94,6 +121,7 @@ export function MaterialFormModal({
         specCode: specCode.trim(),
         quantity: Math.round(parsedQty * 100) / 100,
         unit: unit.trim() || 'Cái',
+        ...(machineId ? { machineId } : {}),
         projectName: projectName.trim(),
         status,
         notes: notes.trim(),
@@ -150,49 +178,39 @@ export function MaterialFormModal({
             )}
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label
-                htmlFor="mat-spec"
-                className="block text-xs font-semibold text-slate-700 mb-1.5"
-              >
-                Mã hiệu / Thông số <span className="text-red-600">*</span>
-              </label>
-              <input
-                id="mat-spec"
-                type="text"
-                placeholder="Ví dụ: Omron E2E-X3D1-N"
-                value={specCode}
-                onChange={(e) => setSpecCode(e.target.value)}
-                className="w-full h-10 px-3 text-sm font-mono bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
-              />
-              {errors.specCode && (
-                <p className="mt-1 text-xs text-red-600">{errors.specCode}</p>
-              )}
-            </div>
-
-            <div>
-              <label
-                htmlFor="mat-project"
-                className="block text-xs font-semibold text-slate-700 mb-1.5"
-              >
-                Dự án / Máy áp dụng <span className="text-red-600">*</span>
-              </label>
-              <input
-                id="mat-project"
-                type="text"
-                placeholder="Ví dụ: Trạm cấp phôi tự động"
-                value={projectName}
-                onChange={(e) => setProjectName(e.target.value)}
-                className="w-full h-10 px-3 text-sm bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
-              />
-              {errors.projectName && (
-                <p className="mt-1 text-xs text-red-600">
-                  {errors.projectName}
-                </p>
-              )}
-            </div>
+          <div>
+            <label
+              htmlFor="mat-spec"
+              className="block text-xs font-semibold text-slate-700 mb-1.5"
+            >
+              Mã hiệu / Thông số <span className="text-red-600">*</span>
+            </label>
+            <input
+              id="mat-spec"
+              type="text"
+              placeholder="Ví dụ: Omron E2E-X3D1-N"
+              value={specCode}
+              onChange={(e) => setSpecCode(e.target.value)}
+              className="w-full h-10 px-3 text-sm font-mono bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
+            />
+            {errors.specCode && (
+              <p className="mt-1 text-xs text-red-600">{errors.specCode}</p>
+            )}
           </div>
+
+          <MachineSelectWithQuickAdd
+            id="mat-project"
+            label="Dự án / Máy áp dụng"
+            machines={machines}
+            selectedMachineId={machineId}
+            legacyFallbackName={projectName}
+            error={errors.projectName}
+            onChange={(sel) => {
+              setMachineId(sel.machineId);
+              setProjectName(sel.machineName);
+            }}
+            onQuickCreateMachine={onQuickCreateMachine}
+          />
 
           <div className="grid grid-cols-2 gap-4">
             <div>

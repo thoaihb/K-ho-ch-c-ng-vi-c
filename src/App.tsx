@@ -1,10 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
+import { User } from 'firebase/auth';
 import { AttachmentPreviewModal } from './components/AttachmentPreviewModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
+import { DriveView } from './components/DriveView';
 import { FilterToolbar } from './components/FilterToolbar';
 import { Header } from './components/Header';
 import { IncidentFormModal } from './components/IncidentFormModal';
 import { IncidentsView } from './components/IncidentsView';
+import { MachineDetailModal } from './components/MachineDetailModal';
+import { MachineFormModal } from './components/MachineFormModal';
+import { QuickAddMachineInput } from './components/MachineSelectWithQuickAdd';
+import { MachinesView } from './components/MachinesView';
 import { MaterialFormModal } from './components/MaterialFormModal';
 import { MaterialsView } from './components/MaterialsView';
 import { OvertimeView } from './components/OvertimeView';
@@ -15,10 +21,19 @@ import { TaskFormModal } from './components/TaskFormModal';
 import { TeamModal } from './components/TeamModal';
 import { WorkplanTable } from './components/WorkplanTable';
 import {
+  clearAccessToken,
+  googleSignIn,
+  initAuth,
+  logout,
+} from './services/googleAuth';
+import {
   AppSection,
   AttachmentItem,
+  DriveAuthProps,
   IncidentEntry,
   IncidentStatus,
+  MachineProject,
+  MachineStatus,
   MaterialItem,
   MaterialStatus,
   OvertimeEntry,
@@ -28,6 +43,11 @@ import {
   WorkTask,
   WorkspaceBackupPayload,
 } from './types/workplan';
+import {
+  MACHINES_STORAGE_KEY,
+  createMachineId,
+  loadMachinesFromStorage,
+} from './utils/machines';
 import {
   INCIDENTS_STORAGE_KEY,
   MATERIALS_STORAGE_KEY,
@@ -59,11 +79,12 @@ import {
 const INITIAL_FILTER: TaskFilter = {
   status: 'all',
   assigneeId: 'all',
+  machineId: 'all',
   search: '',
 };
 
 export default function App() {
-  const [activeSection, setActiveSection] = useState<AppSection>('workplan');
+  const [activeSection, setActiveSection] = useState<AppSection>('machines');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
     try {
       return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true';
@@ -75,6 +96,12 @@ export default function App() {
 
   const [tasks, setTasks] = useState<WorkTask[]>(() =>
     loadTasksFromStorage(window.localStorage)
+  );
+  const [machines, setMachines] = useState<MachineProject[]>(() =>
+    loadMachinesFromStorage(
+      window.localStorage,
+      loadTasksFromStorage(window.localStorage)
+    )
   );
   const [members, setMembers] = useState<TeamMember[]>(() =>
     loadMembersFromStorage(window.localStorage)
@@ -92,28 +119,75 @@ export default function App() {
   const [filter, setFilter] = useState<TaskFilter>(INITIAL_FILTER);
   const [storageError, setStorageError] = useState<string | null>(null);
 
+  const [isMachineModalOpen, setIsMachineModalOpen] = useState(false);
+  const [editingMachine, setEditingMachine] = useState<MachineProject | null>(
+    null
+  );
+  const [detailMachineId, setDetailMachineId] = useState<string | null>(null);
+
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<WorkTask | null>(null);
+  const [taskDefaultMachineId, setTaskDefaultMachineId] = useState<
+    string | undefined
+  >(undefined);
 
   const [isMaterialModalOpen, setIsMaterialModalOpen] = useState(false);
   const [editingMaterial, setEditingMaterial] = useState<MaterialItem | null>(
     null
   );
+  const [materialDefaultMachineId, setMaterialDefaultMachineId] = useState<
+    string | undefined
+  >(undefined);
 
   const [isIncidentModalOpen, setIsIncidentModalOpen] = useState(false);
   const [editingIncident, setEditingIncident] = useState<IncidentEntry | null>(
     null
   );
+  const [incidentDefaultMachineId, setIncidentDefaultMachineId] = useState<
+    string | undefined
+  >(undefined);
 
   const [isTeamModalOpen, setIsTeamModalOpen] = useState(false);
   const [deletingTask, setDeletingTask] = useState<WorkTask | null>(null);
   const [previewAttachment, setPreviewAttachment] =
     useState<AttachmentItem | null>(null);
 
+  const [driveUser, setDriveUser] = useState<User | null>(null);
+  const [driveAccessToken, setDriveAccessToken] = useState<string | null>(null);
+  const [isDriveSigningIn, setIsDriveSigningIn] = useState(false);
+  const [driveAuthError, setDriveAuthError] = useState<string | null>(null);
+  const [driveUploadTrigger, setDriveUploadTrigger] = useState(0);
+
+  useEffect(() => {
+    const unsubscribe = initAuth(
+      (user, token) => {
+        setDriveUser(user);
+        setDriveAccessToken(token);
+        setDriveAuthError(null);
+      },
+      (user) => {
+        setDriveUser(user);
+        setDriveAccessToken(null);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
   useEffect(() => {
     const res = saveToStorage(window.localStorage, TASKS_STORAGE_KEY, tasks);
     setStorageError(res.ok ? null : (res.error ?? null));
   }, [tasks]);
+
+  useEffect(() => {
+    const res = saveToStorage(
+      window.localStorage,
+      MACHINES_STORAGE_KEY,
+      machines
+    );
+    if (!res.ok) {
+      setStorageError(res.error ?? null);
+    }
+  }, [machines]);
 
   useEffect(() => {
     const res = saveToStorage(
@@ -171,35 +245,170 @@ export default function App() {
   }, [isSidebarCollapsed]);
 
   const filteredTasks = useMemo(
-    () => filterTasks(tasks, filter, members),
-    [tasks, filter, members]
+    () => filterTasks(tasks, filter, members, machines),
+    [tasks, filter, members, machines]
   );
 
   const stats = useMemo(() => computeSummaryStats(tasks), [tasks]);
 
-  const handleOpenAddModal = () => {
+  const detailMachine = useMemo(
+    () =>
+      detailMachineId
+        ? machines.find((m) => m.id === detailMachineId) ?? null
+        : null,
+    [detailMachineId, machines]
+  );
+
+  const handleQuickCreateMachine = (
+    data: QuickAddMachineInput
+  ): MachineProject => {
+    const created: MachineProject = {
+      ...data,
+      id: createMachineId(),
+      updatedAt: getTodayIsoDate(),
+    };
+    setMachines((prev) => [created, ...prev]);
+    return created;
+  };
+
+  const handleSaveMachine = (
+    data: Omit<MachineProject, 'id' | 'updatedAt'>,
+    existingId?: string
+  ) => {
+    const today = getTodayIsoDate();
+    if (existingId) {
+      const previous = machines.find((m) => m.id === existingId);
+      setMachines((prev) =>
+        prev.map((m) =>
+          m.id === existingId ? { ...data, id: existingId, updatedAt: today } : m
+        )
+      );
+      if (previous && previous.name !== data.name) {
+        setTasks((prev) =>
+          prev.map((t) =>
+            t.machineId === existingId || t.mainContent === previous.name
+              ? { ...t, machineId: existingId, mainContent: data.name }
+              : t
+          )
+        );
+        setMaterials((prev) =>
+          prev.map((mat) =>
+            mat.machineId === existingId || mat.projectName === previous.name
+              ? { ...mat, machineId: existingId, projectName: data.name }
+              : mat
+          )
+        );
+        setIncidents((prev) =>
+          prev.map((inc) =>
+            inc.machineId === existingId || inc.machineName === previous.name
+              ? { ...inc, machineId: existingId, machineName: data.name }
+              : inc
+          )
+        );
+      }
+    } else {
+      const created: MachineProject = {
+        ...data,
+        id: createMachineId(),
+        updatedAt: today,
+      };
+      setMachines((prev) => [created, ...prev]);
+    }
+    setIsMachineModalOpen(false);
+    setEditingMachine(null);
+  };
+
+  const handleMachineStatusChange = (id: string, status: MachineStatus) => {
+    const today = getTodayIsoDate();
+    setMachines((prev) =>
+      prev.map((m) => (m.id === id ? { ...m, status, updatedAt: today } : m))
+    );
+  };
+
+  const handleDeleteMachine = (id: string) => {
+    setMachines((prev) => prev.filter((m) => m.id !== id));
+    if (detailMachineId === id) {
+      setDetailMachineId(null);
+    }
+    if (filter.machineId === id) {
+      setFilter((prev) => ({ ...prev, machineId: 'all' }));
+    }
+  };
+
+  const handleOpenAddModal = (defaultMachine?: MachineProject) => {
     setEditingTask(null);
+    setTaskDefaultMachineId(defaultMachine?.id);
     setIsTaskModalOpen(true);
   };
 
   const handleOpenEditModal = (task: WorkTask) => {
     setEditingTask(task);
+    setTaskDefaultMachineId(undefined);
     setIsTaskModalOpen(true);
   };
 
+  const handleDriveSignIn = async () => {
+    setIsDriveSigningIn(true);
+    setDriveAuthError(null);
+    try {
+      const { user, accessToken } = await googleSignIn();
+      setDriveUser(user);
+      setDriveAccessToken(accessToken);
+    } catch (err) {
+      setDriveAuthError(
+        err instanceof Error
+          ? err.message
+          : 'Đăng nhập Google thất bại. Vui lòng thử lại.'
+      );
+    } finally {
+      setIsDriveSigningIn(false);
+    }
+  };
+
+  const handleDriveSignOut = async () => {
+    await logout();
+    setDriveUser(null);
+    setDriveAccessToken(null);
+    setDriveAuthError(null);
+  };
+
+  const handleDriveTokenExpired = () => {
+    clearAccessToken();
+    setDriveAccessToken(null);
+  };
+
+  const driveAuth: DriveAuthProps = {
+    userEmail: driveUser?.email ?? null,
+    accessToken: driveAccessToken,
+    isSigningIn: isDriveSigningIn,
+    onSignIn: handleDriveSignIn,
+    onTokenExpired: handleDriveTokenExpired,
+  };
+
   const handleQuickAdd = () => {
-    if (activeSection === 'workplan') {
+    if (activeSection === 'machines') {
+      setEditingMachine(null);
+      setIsMachineModalOpen(true);
+    } else if (activeSection === 'workplan') {
       handleOpenAddModal();
     } else if (activeSection === 'materials') {
       setEditingMaterial(null);
+      setMaterialDefaultMachineId(undefined);
       setIsMaterialModalOpen(true);
     } else if (activeSection === 'incidents') {
       setEditingIncident(null);
+      setIncidentDefaultMachineId(undefined);
       setIsIncidentModalOpen(true);
     } else if (activeSection === 'overtime') {
       const input = document.getElementById('ot-content');
       input?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       input?.focus();
+    } else if (activeSection === 'drive') {
+      if (driveAccessToken) {
+        setDriveUploadTrigger((prev) => prev + 1);
+      } else {
+        void handleDriveSignIn();
+      }
     }
   };
 
@@ -222,6 +431,7 @@ export default function App() {
     }
     setIsTaskModalOpen(false);
     setEditingTask(null);
+    setTaskDefaultMachineId(undefined);
   };
 
   const handleInlineStatusChange = (taskId: string, status: TaskStatus) => {
@@ -309,6 +519,7 @@ export default function App() {
     }
     setIsMaterialModalOpen(false);
     setEditingMaterial(null);
+    setMaterialDefaultMachineId(undefined);
   };
 
   const handleMaterialStatusChange = (id: string, status: MaterialStatus) => {
@@ -343,6 +554,7 @@ export default function App() {
     }
     setIsIncidentModalOpen(false);
     setEditingIncident(null);
+    setIncidentDefaultMachineId(undefined);
   };
 
   const handleIncidentStatusChange = (id: string, status: IncidentStatus) => {
@@ -359,12 +571,16 @@ export default function App() {
     setMembers(payload.members);
     setTasks(payload.tasks);
     setOvertimeEntries(payload.overtimeEntries);
+    if (payload.machines) {
+      setMachines(payload.machines);
+    }
     if (payload.materials) {
       setMaterials(payload.materials);
     }
     if (payload.incidents) {
       setIncidents(payload.incidents);
     }
+    setDetailMachineId(null);
     setFilter(INITIAL_FILTER);
   };
 
@@ -385,6 +601,7 @@ export default function App() {
         <Header
           activeSection={activeSection}
           memberCount={members.length}
+          isDriveConnected={Boolean(driveAccessToken)}
           onOpenMobileMenu={() => setIsMobileMenuOpen(true)}
           onOpenTeamModal={() => setIsTeamModalOpen(true)}
           onQuickAdd={handleQuickAdd}
@@ -400,6 +617,26 @@ export default function App() {
             </div>
           )}
 
+          {activeSection === 'machines' && (
+            <MachinesView
+              machines={machines}
+              tasks={tasks}
+              materials={materials}
+              incidents={incidents}
+              onOpenAddModal={() => {
+                setEditingMachine(null);
+                setIsMachineModalOpen(true);
+              }}
+              onEditMachine={(machine) => {
+                setEditingMachine(machine);
+                setIsMachineModalOpen(true);
+              }}
+              onStatusChange={handleMachineStatusChange}
+              onDeleteMachine={handleDeleteMachine}
+              onOpenMachineDetail={(machine) => setDetailMachineId(machine.id)}
+            />
+          )}
+
           {activeSection === 'workplan' && (
             <>
               <SummaryStrip stats={stats} />
@@ -407,6 +644,7 @@ export default function App() {
               <FilterToolbar
                 filter={filter}
                 members={members}
+                machines={machines}
                 totalCount={tasks.length}
                 filteredCount={filteredTasks.length}
                 onChangeFilter={setFilter}
@@ -417,12 +655,14 @@ export default function App() {
                 tasks={filteredTasks}
                 totalTaskCount={tasks.length}
                 members={members}
+                machines={machines}
                 onStatusChange={handleInlineStatusChange}
                 onProgressChange={handleInlineProgressChange}
                 onEditTask={handleOpenEditModal}
                 onDeleteTask={setDeletingTask}
                 onPreviewAttachment={setPreviewAttachment}
-                onOpenAddModal={handleOpenAddModal}
+                onOpenMachineDetail={(machine) => setDetailMachineId(machine.id)}
+                onOpenAddModal={() => handleOpenAddModal()}
                 onResetFilter={handleResetFilter}
               />
             </>
@@ -441,16 +681,20 @@ export default function App() {
           {activeSection === 'materials' && (
             <MaterialsView
               items={materials}
+              machines={machines}
               onOpenAddModal={() => {
                 setEditingMaterial(null);
+                setMaterialDefaultMachineId(undefined);
                 setIsMaterialModalOpen(true);
               }}
               onEditItem={(item) => {
                 setEditingMaterial(item);
+                setMaterialDefaultMachineId(undefined);
                 setIsMaterialModalOpen(true);
               }}
               onStatusChange={handleMaterialStatusChange}
               onDeleteItem={handleDeleteMaterial}
+              onOpenMachineDetail={(machine) => setDetailMachineId(machine.id)}
             />
           )}
 
@@ -458,17 +702,41 @@ export default function App() {
             <IncidentsView
               entries={incidents}
               members={members}
+              machines={machines}
               onOpenAddModal={() => {
                 setEditingIncident(null);
+                setIncidentDefaultMachineId(undefined);
                 setIsIncidentModalOpen(true);
               }}
               onEditEntry={(entry) => {
                 setEditingIncident(entry);
+                setIncidentDefaultMachineId(undefined);
                 setIsIncidentModalOpen(true);
               }}
               onStatusChange={handleIncidentStatusChange}
               onDeleteEntry={handleDeleteIncident}
               onPreviewAttachment={setPreviewAttachment}
+              onOpenMachineDetail={(machine) => setDetailMachineId(machine.id)}
+            />
+          )}
+
+          {activeSection === 'drive' && (
+            <DriveView
+              user={driveUser}
+              accessToken={driveAccessToken}
+              isSigningIn={isDriveSigningIn}
+              authError={driveAuthError}
+              onSignIn={handleDriveSignIn}
+              onSignOut={handleDriveSignOut}
+              onTokenExpired={handleDriveTokenExpired}
+              tasks={tasks}
+              members={members}
+              machines={machines}
+              overtimeEntries={overtimeEntries}
+              materials={materials}
+              incidents={incidents}
+              onRestoreBackup={handleRestoreBackup}
+              openUploadTrigger={driveUploadTrigger}
             />
           )}
 
@@ -476,44 +744,97 @@ export default function App() {
             <SummaryExportView
               tasks={tasks}
               members={members}
+              machines={machines}
               overtimeEntries={overtimeEntries}
               materials={materials}
               incidents={incidents}
+              driveAuth={driveAuth}
+              onOpenDriveTab={() => setActiveSection('drive')}
               onRestoreBackup={handleRestoreBackup}
             />
           )}
         </main>
       </div>
 
+      <MachineDetailModal
+        machine={detailMachine}
+        tasks={tasks}
+        materials={materials}
+        incidents={incidents}
+        members={members}
+        onClose={() => setDetailMachineId(null)}
+        onEditMachine={(machine) => {
+          setEditingMachine(machine);
+          setIsMachineModalOpen(true);
+        }}
+        onQuickAddTask={(machine) => handleOpenAddModal(machine)}
+        onQuickAddMaterial={(machine) => {
+          setEditingMaterial(null);
+          setMaterialDefaultMachineId(machine.id);
+          setIsMaterialModalOpen(true);
+        }}
+        onQuickAddIncident={(machine) => {
+          setEditingIncident(null);
+          setIncidentDefaultMachineId(machine.id);
+          setIsIncidentModalOpen(true);
+        }}
+        onPreviewAttachment={setPreviewAttachment}
+      />
+
+      <MachineFormModal
+        isOpen={isMachineModalOpen}
+        editingMachine={editingMachine}
+        existingMachines={machines}
+        onClose={() => {
+          setIsMachineModalOpen(false);
+          setEditingMachine(null);
+        }}
+        onSave={handleSaveMachine}
+      />
+
       <TaskFormModal
         isOpen={isTaskModalOpen}
         editingTask={editingTask}
+        defaultMachineId={taskDefaultMachineId}
         members={members}
+        machines={machines}
+        driveAuth={driveAuth}
         onClose={() => {
           setIsTaskModalOpen(false);
           setEditingTask(null);
+          setTaskDefaultMachineId(undefined);
         }}
+        onQuickCreateMachine={handleQuickCreateMachine}
         onSave={handleSaveTask}
       />
 
       <MaterialFormModal
         isOpen={isMaterialModalOpen}
         editingItem={editingMaterial}
+        defaultMachineId={materialDefaultMachineId}
+        machines={machines}
         onClose={() => {
           setIsMaterialModalOpen(false);
           setEditingMaterial(null);
+          setMaterialDefaultMachineId(undefined);
         }}
+        onQuickCreateMachine={handleQuickCreateMachine}
         onSave={handleSaveMaterial}
       />
 
       <IncidentFormModal
         isOpen={isIncidentModalOpen}
         editingEntry={editingIncident}
+        defaultMachineId={incidentDefaultMachineId}
         members={members}
+        machines={machines}
+        driveAuth={driveAuth}
         onClose={() => {
           setIsIncidentModalOpen(false);
           setEditingIncident(null);
+          setIncidentDefaultMachineId(undefined);
         }}
+        onQuickCreateMachine={handleQuickCreateMachine}
         onSave={handleSaveIncident}
       />
 

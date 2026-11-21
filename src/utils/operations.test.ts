@@ -37,7 +37,7 @@ test('filterMaterials and computeMaterialStats filter and count statuses accurat
 
   const filtered = filterMaterials(DEFAULT_MATERIAL_ITEMS, {
     status: 'Cần đặt',
-    projectName: 'all',
+    machineId: 'all',
     search: 'encoder',
   });
   assert.equal(filtered.length, 1);
@@ -56,6 +56,7 @@ test('filterIncidents and computeIncidentStats filter and count statuses accurat
     {
       status: 'Đang xử lý',
       assigneeId: 'mem-4',
+      machineId: 'all',
       search: 'G120C',
     },
     DEFAULT_TEAM_MEMBERS
@@ -149,7 +150,7 @@ test('buildMaterialsCsv and buildIncidentsCsv produce UTF-8 BOM CSV output inclu
 test('filterIncidents searches repairTime and attachment names', () => {
   const byRepairTime = filterIncidents(
     DEFAULT_INCIDENT_ENTRIES,
-    { status: 'all', assigneeId: 'all', search: '1.5 giờ' },
+    { status: 'all', assigneeId: 'all', machineId: 'all', search: '1.5 giờ' },
     DEFAULT_TEAM_MEMBERS
   );
   assert.equal(byRepairTime.length, 1);
@@ -157,15 +158,50 @@ test('filterIncidents searches repairTime and attachment names', () => {
 
   const byAttachment = filterIncidents(
     DEFAULT_INCIDENT_ENTRIES,
-    { status: 'all', assigneeId: 'all', search: 'Diode_Van24V' },
+    {
+      status: 'all',
+      assigneeId: 'all',
+      machineId: 'all',
+      search: 'Diode_Van24V',
+    },
     DEFAULT_TEAM_MEMBERS
   );
   assert.equal(byAttachment.length, 1);
   assert.equal(byAttachment[0].id, 'inc-1');
 });
 
-test('v2 JSON backup round-trips materials and incidents with repairTime and attachments cleanly', () => {
-  const json = buildBackupJson(
+test('v3 JSON backup round-trips machines, materials, and incidents cleanly and handles legacy v2 backups', () => {
+  const sampleMachines = [
+    {
+      id: 'mac-1',
+      code: 'SQ2118-EPX',
+      name: 'Máy tự động SQ2118 - Máy nhỏ keo epoxy',
+      description: 'Cụm nhỏ keo tự động',
+      startDate: '2026-11-01',
+      status: 'Đang triển khai' as const,
+      updatedAt: '2026-11-20',
+    },
+  ];
+
+  const jsonV3 = buildBackupJson(
+    DEFAULT_TEAM_MEMBERS,
+    DEFAULT_WORK_TASKS,
+    [],
+    '2026-11-20',
+    DEFAULT_MATERIAL_ITEMS,
+    DEFAULT_INCIDENT_ENTRIES,
+    sampleMachines
+  );
+  const resV3 = parseAndValidateBackupJson(jsonV3);
+  assert.equal(resV3.ok, true);
+  assert.equal(resV3.data?.machines?.length, 1);
+  assert.equal(resV3.data?.machines?.[0].code, 'SQ2118-EPX');
+  assert.equal(resV3.data?.materials?.length, DEFAULT_MATERIAL_ITEMS.length);
+  assert.equal(resV3.data?.incidents?.length, DEFAULT_INCIDENT_ENTRIES.length);
+  assert.equal(resV3.data?.incidents?.[0].repairTime, '08:30 - 10:15');
+  assert.equal(resV3.data?.incidents?.[0].attachments.length, 1);
+
+  const jsonLegacyNoMachines = buildBackupJson(
     DEFAULT_TEAM_MEMBERS,
     DEFAULT_WORK_TASKS,
     [],
@@ -173,10 +209,9 @@ test('v2 JSON backup round-trips materials and incidents with repairTime and att
     DEFAULT_MATERIAL_ITEMS,
     DEFAULT_INCIDENT_ENTRIES
   );
-  const res = parseAndValidateBackupJson(json);
-  assert.equal(res.ok, true);
-  assert.equal(res.data?.materials?.length, DEFAULT_MATERIAL_ITEMS.length);
-  assert.equal(res.data?.incidents?.length, DEFAULT_INCIDENT_ENTRIES.length);
-  assert.equal(res.data?.incidents?.[0].repairTime, '08:30 - 10:15');
-  assert.equal(res.data?.incidents?.[0].attachments.length, 1);
+  const legacyObj = JSON.parse(jsonLegacyNoMachines) as Record<string, unknown>;
+  delete legacyObj.machines;
+  const resLegacy = parseAndValidateBackupJson(JSON.stringify(legacyObj));
+  assert.equal(resLegacy.ok, true);
+  assert.ok((resLegacy.data?.machines?.length ?? 0) >= 1);
 });

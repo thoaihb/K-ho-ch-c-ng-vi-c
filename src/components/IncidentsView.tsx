@@ -16,19 +16,23 @@ import {
   IncidentEntry,
   IncidentFilter,
   IncidentStatus,
+  MachineProject,
   TeamMember,
 } from '../types/workplan';
+import { findMachineForRecord, normalizeMachineName } from '../utils/machines';
 import { computeIncidentStats, filterIncidents } from '../utils/operations';
 import { formatDateVi, formatFileSize } from '../utils/workplan';
 
 interface IncidentsViewProps {
   entries: IncidentEntry[];
   members: TeamMember[];
+  machines: MachineProject[];
   onOpenAddModal: () => void;
   onEditEntry: (entry: IncidentEntry) => void;
   onStatusChange: (id: string, status: IncidentStatus) => void;
   onDeleteEntry: (id: string) => void;
   onPreviewAttachment: (attachment: AttachmentItem) => void;
+  onOpenMachineDetail: (machine: MachineProject) => void;
 }
 
 function getIncidentStatusStyle(
@@ -50,15 +54,18 @@ function getIncidentStatusStyle(
 export function IncidentsView({
   entries,
   members,
+  machines,
   onOpenAddModal,
   onEditEntry,
   onStatusChange,
   onDeleteEntry,
   onPreviewAttachment,
+  onOpenMachineDetail,
 }: IncidentsViewProps) {
   const [filter, setFilter] = useState<IncidentFilter>({
     status: 'all',
     assigneeId: 'all',
+    machineId: 'all',
     search: '',
   });
   const [deletingEntry, setDeletingEntry] = useState<IncidentEntry | null>(
@@ -70,15 +77,33 @@ export function IncidentsView({
     [members]
   );
 
+  const unlinkedMachineNames = useMemo(() => {
+    const knownNames = new Set(
+      machines.map((m) => normalizeMachineName(m.name))
+    );
+    const seen = new Set<string>();
+    const names: string[] = [];
+    for (const entry of entries) {
+      const trimmed = entry.machineName.trim();
+      if (!trimmed) continue;
+      const norm = normalizeMachineName(trimmed);
+      if (knownNames.has(norm) || seen.has(norm)) continue;
+      seen.add(norm);
+      names.push(trimmed);
+    }
+    return names;
+  }, [entries, machines]);
+
   const stats = useMemo(() => computeIncidentStats(entries), [entries]);
   const filteredEntries = useMemo(
-    () => filterIncidents(entries, filter, members),
-    [entries, filter, members]
+    () => filterIncidents(entries, filter, members, machines),
+    [entries, filter, members, machines]
   );
 
   const hasActiveFilter =
     filter.status !== 'all' ||
     filter.assigneeId !== 'all' ||
+    filter.machineId !== 'all' ||
     filter.search.trim().length > 0;
 
   return (
@@ -157,6 +182,35 @@ export function IncidentsView({
 
           <div className="flex items-center gap-2">
             <label
+              htmlFor="inc-filter-machine"
+              className="text-xs font-medium text-slate-600 whitespace-nowrap"
+            >
+              Máy / Cụm máy:
+            </label>
+            <select
+              id="inc-filter-machine"
+              value={filter.machineId}
+              onChange={(e) =>
+                setFilter((prev) => ({ ...prev, machineId: e.target.value }))
+              }
+              className="h-9 max-w-[230px] px-3 text-sm bg-white border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
+            >
+              <option value="all">Tất cả máy</option>
+              {machines.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.code} — {m.name}
+                </option>
+              ))}
+              {unlinkedMachineNames.map((name) => (
+                <option key={name} value={`name:${name}`}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <label
               htmlFor="inc-filter-assignee"
               className="text-xs font-medium text-slate-600 whitespace-nowrap"
             >
@@ -181,7 +235,7 @@ export function IncidentsView({
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          <div className="relative flex-1 sm:w-64 sm:flex-initial">
+          <div className="relative flex-1 sm:w-60 sm:flex-initial">
             <Search
               className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
               aria-hidden="true"
@@ -206,7 +260,12 @@ export function IncidentsView({
             <button
               type="button"
               onClick={() =>
-                setFilter({ status: 'all', assigneeId: 'all', search: '' })
+                setFilter({
+                  status: 'all',
+                  assigneeId: 'all',
+                  machineId: 'all',
+                  search: '',
+                })
               }
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
             >
@@ -235,7 +294,12 @@ export function IncidentsView({
               <button
                 type="button"
                 onClick={() =>
-                  setFilter({ status: 'all', assigneeId: 'all', search: '' })
+                  setFilter({
+                    status: 'all',
+                    assigneeId: 'all',
+                    machineId: 'all',
+                    search: '',
+                  })
                 }
                 className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 cursor-pointer"
               >
@@ -295,6 +359,11 @@ export function IncidentsView({
               <tbody className="divide-y divide-slate-200">
                 {filteredEntries.map((entry, idx) => {
                   const member = memberMap.get(entry.assigneeId);
+                  const linkedMachine = findMachineForRecord(
+                    machines,
+                    entry.machineId,
+                    entry.machineName
+                  );
                   const attachments = entry.attachments ?? [];
                   return (
                     <tr
@@ -316,8 +385,20 @@ export function IncidentsView({
                           <span className="text-slate-400">—</span>
                         )}
                       </td>
-                      <td className="py-3.5 px-2.5 font-semibold text-slate-900 leading-snug text-[13px]">
-                        {entry.machineName}
+                      <td className="py-3.5 px-2.5 font-semibold leading-snug text-[13px]">
+                        {linkedMachine ? (
+                          <button
+                            type="button"
+                            onClick={() => onOpenMachineDetail(linkedMachine)}
+                            className="text-left text-[#2563EB] hover:text-blue-800 hover:underline cursor-pointer"
+                          >
+                            {linkedMachine.name}
+                          </button>
+                        ) : (
+                          <span className="text-slate-900">
+                            {entry.machineName}
+                          </span>
+                        )}
                       </td>
                       <td className="py-3.5 px-2.5 text-xs text-slate-700 leading-relaxed whitespace-pre-line">
                         {entry.description}
@@ -436,6 +517,11 @@ export function IncidentsView({
           <div className="md:hidden divide-y divide-slate-200">
             {filteredEntries.map((entry, idx) => {
               const member = memberMap.get(entry.assigneeId);
+              const linkedMachine = findMachineForRecord(
+                machines,
+                entry.machineId,
+                entry.machineName
+              );
               return (
                 <article key={entry.id} className="p-4 space-y-2.5">
                   <div className="flex items-start justify-between gap-2">
@@ -444,7 +530,17 @@ export function IncidentsView({
                         STT #{idx + 1} · {formatDateVi(entry.occurredAt)}
                       </div>
                       <h3 className="mt-0.5 text-sm font-semibold text-slate-900">
-                        {entry.machineName}
+                        {linkedMachine ? (
+                          <button
+                            type="button"
+                            onClick={() => onOpenMachineDetail(linkedMachine)}
+                            className="text-left text-[#2563EB] underline"
+                          >
+                            {linkedMachine.name}
+                          </button>
+                        ) : (
+                          entry.machineName
+                        )}
                       </h3>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">

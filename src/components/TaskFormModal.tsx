@@ -1,24 +1,36 @@
-import { ChangeEvent, FormEvent, useEffect, useState } from 'react';
-import { Check, Circle, Paperclip, Plus, Trash2, Upload, X } from 'lucide-react';
+import { ChangeEvent, FormEvent, useEffect, useRef, useState } from 'react';
+import { Check, Circle, Cloud, Paperclip, Plus, Trash2, Upload, X } from 'lucide-react';
 import {
   AttachmentItem,
+  DriveAuthProps,
+  MachineProject,
   TASK_STATUSES,
   TaskStatus,
   TeamMember,
   WorkTask,
 } from '../types/workplan';
+import { findMachineForRecord } from '../utils/machines';
 import {
   clampProgress,
   formatFileSize,
   getTodayIsoDate,
   resolveProgressForStatus,
 } from '../utils/workplan';
+import { DrivePickerModal } from './DrivePickerModal';
+import {
+  MachineSelectWithQuickAdd,
+  QuickAddMachineInput,
+} from './MachineSelectWithQuickAdd';
 
 interface TaskFormModalProps {
   isOpen: boolean;
   editingTask: WorkTask | null;
+  defaultMachineId?: string;
   members: TeamMember[];
+  machines: MachineProject[];
+  driveAuth?: DriveAuthProps;
   onClose: () => void;
+  onQuickCreateMachine: (data: QuickAddMachineInput) => MachineProject;
   onSave: (taskData: Omit<WorkTask, 'id'>, existingId?: string) => void;
 }
 
@@ -27,11 +39,16 @@ const MAX_INLINE_FILE_BYTES = 512 * 1024; // 512 KB per file for safe localStora
 export function TaskFormModal({
   isOpen,
   editingTask,
+  defaultMachineId,
   members,
+  machines,
+  driveAuth,
   onClose,
+  onQuickCreateMachine,
   onSave,
 }: TaskFormModalProps) {
   const [createdAt, setCreatedAt] = useState(getTodayIsoDate());
+  const [machineId, setMachineId] = useState('');
   const [mainContent, setMainContent] = useState('');
   const [detailContent, setDetailContent] = useState('');
   const [targetDate, setTargetDate] = useState('');
@@ -42,13 +59,27 @@ export function TaskFormModal({
   const [notes, setNotes] = useState('');
   const [customFileName, setCustomFileName] = useState('');
   const [fileNotice, setFileNotice] = useState('');
+  const [isDrivePickerOpen, setIsDrivePickerOpen] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const machinesRef = useRef(machines);
+  machinesRef.current = machines;
+  const membersRef = useRef(members);
+  membersRef.current = members;
 
   useEffect(() => {
     if (!isOpen) return;
+    const currentMachines = machinesRef.current;
+    const currentMembers = membersRef.current;
     if (editingTask) {
+      const matched = findMachineForRecord(
+        currentMachines,
+        editingTask.machineId,
+        editingTask.mainContent
+      );
       setCreatedAt(editingTask.createdAt);
-      setMainContent(editingTask.mainContent);
+      setMachineId(matched?.id ?? editingTask.machineId ?? '');
+      setMainContent(matched?.name ?? editingTask.mainContent);
       setDetailContent(editingTask.detailContent);
       setTargetDate(editingTask.targetDate);
       setAssigneeId(editingTask.assigneeId);
@@ -57,11 +88,15 @@ export function TaskFormModal({
       setAttachments(editingTask.attachments);
       setNotes(editingTask.notes);
     } else {
+      const preselected = defaultMachineId
+        ? currentMachines.find((m) => m.id === defaultMachineId)
+        : undefined;
       setCreatedAt(getTodayIsoDate());
-      setMainContent('');
+      setMachineId(preselected?.id ?? '');
+      setMainContent(preselected?.name ?? '');
       setDetailContent('');
       setTargetDate('');
-      setAssigneeId(members[0]?.id ?? '');
+      setAssigneeId(currentMembers[0]?.id ?? '');
       setStatus('Đang thực hiện');
       setProgress(0);
       setAttachments([]);
@@ -69,8 +104,9 @@ export function TaskFormModal({
     }
     setCustomFileName('');
     setFileNotice('');
+    setIsDrivePickerOpen(false);
     setErrors({});
-  }, [isOpen, editingTask, members]);
+  }, [isOpen, editingTask, defaultMachineId]);
 
   if (!isOpen) return null;
 
@@ -154,7 +190,7 @@ export function TaskFormModal({
       nextErrors.createdAt = 'Vui lòng chọn ngày tạo.';
     }
     if (!mainContent.trim()) {
-      nextErrors.mainContent = 'Vui lòng nhập nội dung chính.';
+      nextErrors.mainContent = 'Vui lòng chọn máy / dự án từ danh mục.';
     }
     if (!targetDate) {
       nextErrors.targetDate = 'Vui lòng chọn ngày kế hoạch hoàn thành.';
@@ -171,6 +207,7 @@ export function TaskFormModal({
     onSave(
       {
         createdAt,
+        ...(machineId ? { machineId } : {}),
         mainContent: mainContent.trim(),
         detailContent: detailContent.trim(),
         targetDate,
@@ -250,25 +287,19 @@ export function TaskFormModal({
             </div>
           </div>
 
-          <div>
-            <label
-              htmlFor="task-main-content"
-              className="block text-xs font-semibold text-slate-700 mb-1.5"
-            >
-              Nội dung chính <span className="text-red-600">*</span>
-            </label>
-            <input
-              id="task-main-content"
-              type="text"
-              placeholder="Ví dụ: Lập trình PLC S7-1500 cụm băng tải đầu vào"
-              value={mainContent}
-              onChange={(e) => setMainContent(e.target.value)}
-              className="w-full h-10 px-3 text-sm bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-700/20 focus:border-blue-700"
-            />
-            {errors.mainContent && (
-              <p className="mt-1 text-xs text-red-600">{errors.mainContent}</p>
-            )}
-          </div>
+          <MachineSelectWithQuickAdd
+            id="task-main-content"
+            label="Nội dung chính (Máy / Dự án)"
+            machines={machines}
+            selectedMachineId={machineId}
+            legacyFallbackName={mainContent}
+            error={errors.mainContent}
+            onChange={(sel) => {
+              setMachineId(sel.machineId);
+              setMainContent(sel.machineName);
+            }}
+            onQuickCreateMachine={onQuickCreateMachine}
+          />
 
           <div>
             <label
@@ -287,8 +318,8 @@ export function TaskFormModal({
             />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
+          <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
+            <div className="sm:col-span-5">
               <label
                 htmlFor="task-assignee"
                 className="block text-xs font-semibold text-slate-700 mb-1.5"
@@ -313,7 +344,7 @@ export function TaskFormModal({
               )}
             </div>
 
-            <div>
+            <div className="sm:col-span-7">
               <span className="block text-xs font-semibold text-slate-700 mb-1.5">
                 Trạng thái <span className="text-red-600">*</span>
               </span>
@@ -347,7 +378,7 @@ export function TaskFormModal({
                       ) : (
                         <Circle className="w-3.5 h-3.5 shrink-0 text-slate-300" aria-hidden="true" />
                       )}
-                      <span className="truncate">{option}</span>
+                      <span>{option}</span>
                     </button>
                   );
                 })}
@@ -405,7 +436,7 @@ export function TaskFormModal({
             <span className="block text-xs font-semibold text-slate-700 mb-1.5">
               File đính kèm
             </span>
-            <div className="flex flex-col sm:flex-row gap-2">
+            <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2">
               <label className="inline-flex items-center justify-center gap-2 px-3.5 h-10 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-300 rounded-lg hover:bg-slate-100 cursor-pointer shrink-0">
                 <Upload className="w-4 h-4 text-slate-500" aria-hidden="true" />
                 <span>Tải file lên</span>
@@ -417,7 +448,18 @@ export function TaskFormModal({
                 />
               </label>
 
-              <div className="flex-1 flex gap-2">
+              {driveAuth && (
+                <button
+                  type="button"
+                  onClick={() => setIsDrivePickerOpen(true)}
+                  className="inline-flex items-center justify-center gap-2 px-3.5 h-10 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 cursor-pointer shrink-0"
+                >
+                  <Cloud className="w-4 h-4 text-[#2563EB]" aria-hidden="true" />
+                  <span>Chọn từ Drive</span>
+                </button>
+              )}
+
+              <div className="flex-1 min-w-[220px] flex gap-2">
                 <input
                   type="text"
                   aria-label="Hoặc nhập tên tài liệu / đường dẫn"
@@ -514,6 +556,20 @@ export function TaskFormModal({
           </div>
         </form>
       </div>
+
+      {driveAuth && (
+        <DrivePickerModal
+          isOpen={isDrivePickerOpen}
+          accessToken={driveAuth.accessToken}
+          isSigningIn={driveAuth.isSigningIn}
+          onSignIn={driveAuth.onSignIn}
+          onTokenExpired={driveAuth.onTokenExpired}
+          onClose={() => setIsDrivePickerOpen(false)}
+          onSelectFiles={(chosen) =>
+            setAttachments((prev) => [...prev, ...chosen])
+          }
+        />
+      )}
     </div>
   );
 }

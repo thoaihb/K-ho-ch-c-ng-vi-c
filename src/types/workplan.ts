@@ -27,6 +27,7 @@ export interface TeamMember {
 export interface WorkTask {
   id: string;
   createdAt: string; // YYYY-MM-DD
+  machineId?: string;
   mainContent: string;
   detailContent: string;
   targetDate: string; // YYYY-MM-DD
@@ -40,6 +41,7 @@ export interface WorkTask {
 export interface TaskFilter {
   status: 'all' | TaskStatus;
   assigneeId: string; // 'all' or member id
+  machineId: string; // 'all' or machine id
   search: string;
 }
 
@@ -53,11 +55,49 @@ export interface SummaryStats {
 }
 
 export type AppSection =
+  | 'machines'
   | 'workplan'
   | 'overtime'
   | 'materials'
   | 'incidents'
+  | 'drive'
   | 'summary';
+
+export type MachineStatus =
+  | 'Đang triển khai'
+  | 'Chạy thử FAT/SAT'
+  | 'Đã bàn giao'
+  | 'Tạm dừng';
+
+export const MACHINE_STATUSES: readonly MachineStatus[] = [
+  'Đang triển khai',
+  'Chạy thử FAT/SAT',
+  'Đã bàn giao',
+  'Tạm dừng',
+] as const;
+
+export interface MachineProject {
+  id: string;
+  code: string;
+  name: string;
+  description: string;
+  startDate: string; // YYYY-MM-DD
+  status: MachineStatus;
+  updatedAt: string; // YYYY-MM-DD
+}
+
+export interface MachineFilter {
+  status: 'all' | MachineStatus;
+  search: string;
+}
+
+export interface MachineSummaryStats {
+  total: number;
+  inProgress: number;
+  testing: number;
+  delivered: number;
+  paused: number;
+}
 
 export type OvertimeDayType = 'Ngày thường' | 'Cuối tuần' | 'Ngày lễ';
 
@@ -121,6 +161,7 @@ export interface MaterialItem {
   specCode: string;
   quantity: number;
   unit: string;
+  machineId?: string;
   projectName: string;
   status: MaterialStatus;
   notes: string;
@@ -129,7 +170,7 @@ export interface MaterialItem {
 
 export interface MaterialFilter {
   status: 'all' | MaterialStatus;
-  projectName: string; // 'all' or projectName
+  machineId: string; // 'all', machineId, or 'name:<projectName>'
   search: string;
 }
 
@@ -153,6 +194,7 @@ export interface IncidentEntry {
   id: string;
   occurredAt: string; // YYYY-MM-DD
   repairTime: string;
+  machineId?: string;
   machineName: string;
   description: string;
   resolution: string;
@@ -164,6 +206,7 @@ export interface IncidentEntry {
 export interface IncidentFilter {
   status: 'all' | IncidentStatus;
   assigneeId: string; // 'all' or member id
+  machineId: string; // 'all', machineId, or 'name:<machineName>'
   search: string;
 }
 
@@ -178,9 +221,19 @@ export interface WorkspaceBackupPayload {
   version: number;
   exportedAt: string;
   members: TeamMember[];
+  machines?: MachineProject[];
   tasks: WorkTask[];
   overtimeEntries: OvertimeEntry[];
   materials?: MaterialItem[];
   incidents?: IncidentEntry[];
 }
+
+export interface DriveAuthProps {
+  userEmail?: string | null;
+  accessToken: string | null;
+  isSigningIn: boolean;
+  onSignIn: () => Promise<void>;
+  onTokenExpired: () => void;
+}
+
 

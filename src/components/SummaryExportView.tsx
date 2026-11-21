@@ -1,19 +1,34 @@
 import { ChangeEvent, useMemo, useState } from 'react';
 import {
   CheckCircle2,
+  Cloud,
   Download,
   FileJson,
   FileSpreadsheet,
+  Loader2,
   Upload,
 } from 'lucide-react';
 import {
+  DriveAuthProps,
   IncidentEntry,
+  MachineProject,
   MaterialItem,
   OvertimeEntry,
   TeamMember,
   WorkTask,
   WorkspaceBackupPayload,
 } from '../types/workplan';
+import {
+  APP_DRIVE_FOLDER_NAME,
+  DriveApiError,
+  DriveFile,
+  findFileInFolderByName,
+  findOrCreateAppDriveFolder,
+  updateDriveFileContent,
+  uploadFileToDrive,
+} from '../services/googleDrive';
+import { GoogleSignInButton } from './GoogleSignInButton';
+import { buildMachinesCsv, computeMachineStats } from '../utils/machines';
 import {
   buildIncidentsCsv,
   buildMaterialsCsv,
@@ -37,18 +52,24 @@ import { computeSummaryStats, getTodayIsoDate } from '../utils/workplan';
 interface SummaryExportViewProps {
   tasks: WorkTask[];
   members: TeamMember[];
+  machines: MachineProject[];
   overtimeEntries: OvertimeEntry[];
   materials: MaterialItem[];
   incidents: IncidentEntry[];
+  driveAuth?: DriveAuthProps;
+  onOpenDriveTab?: () => void;
   onRestoreBackup: (payload: WorkspaceBackupPayload) => void;
 }
 
 export function SummaryExportView({
   tasks,
   members,
+  machines,
   overtimeEntries,
   materials,
   incidents,
+  driveAuth,
+  onOpenDriveTab,
   onRestoreBackup,
 }: SummaryExportViewProps) {
   const defaultMonth = getMonthKey(getTodayIsoDate());
@@ -59,6 +80,14 @@ export function SummaryExportView({
   } | null>(null);
   const [pendingRestore, setPendingRestore] =
     useState<WorkspaceBackupPayload | null>(null);
+  const [isSyncingDrive, setIsSyncingDrive] = useState(false);
+  const [driveOverwritePrompt, setDriveOverwritePrompt] = useState<{
+    existingFile: DriveFile;
+    fileName: string;
+    content: string;
+    parentId: string;
+    folderName: string;
+  } | null>(null);
 
   const availableMonths = useMemo(() => {
     const set = new Set<string>();
@@ -71,6 +100,7 @@ export function SummaryExportView({
   }, [overtimeEntries, defaultMonth]);
 
   const workStats = useMemo(() => computeSummaryStats(tasks), [tasks]);
+  const machineStats = useMemo(() => computeMachineStats(machines), [machines]);
   const materialStats = useMemo(
     () => computeMaterialStats(materials),
     [materials]
@@ -159,6 +189,19 @@ export function SummaryExportView({
     });
   };
 
+  const handleExportMachinesCsv = () => {
+    const csv = buildMachinesCsv(machines, tasks, materials, incidents);
+    triggerTextDownload(
+      `danh-muc-may-du-an-${getTodayIsoDate()}.csv`,
+      csv,
+      'text/csv;charset=utf-8;'
+    );
+    setFeedback({
+      type: 'success',
+      message: `Đã xuất file CSV Danh mục Máy / Dự án (${machines.length} máy).`,
+    });
+  };
+
   const handleDownloadBackupJson = () => {
     const json = buildBackupJson(
       members,
@@ -166,7 +209,8 @@ export function SummaryExportView({
       overtimeEntries,
       getTodayIsoDate(),
       materials,
-      incidents
+      incidents,
+      machines
     );
     triggerTextDownload(
       `sao-luu-tu-dong-hoa-${getTodayIsoDate()}.json`,
@@ -200,13 +244,139 @@ export function SummaryExportView({
   const handleConfirmRestore = () => {
     if (!pendingRestore) return;
     onRestoreBackup(pendingRestore);
+    const macCount = pendingRestore.machines?.length ?? 0;
     const matCount = pendingRestore.materials?.length ?? 0;
     const incCount = pendingRestore.incidents?.length ?? 0;
     setFeedback({
       type: 'success',
-      message: `Đã khôi phục ${pendingRestore.tasks.length} công việc, ${pendingRestore.overtimeEntries.length} bản ghi tăng ca, ${matCount} vật tư, ${incCount} sự cố và ${pendingRestore.members.length} thành viên.`,
+      message: `Đã khôi phục ${macCount} máy/dự án, ${pendingRestore.tasks.length} công việc, ${pendingRestore.overtimeEntries.length} bản ghi tăng ca, ${matCount} vật tư, ${incCount} sự cố và ${pendingRestore.members.length} thành viên.`,
     });
     setPendingRestore(null);
+  };
+
+  const handleQuickBackupToDrive = async () => {
+    if (!driveAuth?.accessToken) return;
+    setIsSyncingDrive(true);
+    setFeedback(null);
+    try {
+      const folder = await findOrCreateAppDriveFolder(driveAuth.accessToken);
+      const today = getTodayIsoDate();
+      const fileName = `sao-luu-tu-dong-hoa-${today}.json`;
+      const content = buildBackupJson(
+        members,
+        tasks,
+        overtimeEntries,
+        today,
+        materials,
+        incidents,
+        machines
+      );
+
+      const existing = await findFileInFolderByName(
+        driveAuth.accessToken,
+        fileName,
+        folder.id
+      );
+
+      if (existing) {
+        setDriveOverwritePrompt({
+          existingFile: existing,
+          fileName,
+          content,
+          parentId: folder.id,
+          folderName: folder.name,
+        });
+        setIsSyncingDrive(false);
+        return;
+      }
+
+      await uploadFileToDrive(driveAuth.accessToken, {
+        fileName,
+        mimeType: 'application/json',
+        content,
+        parentId: folder.id,
+      });
+      setFeedback({
+        type: 'success',
+        message: `Đã lưu bản sao lưu "${fileName}" lên Google Drive (thư mục "${folder.name}").`,
+      });
+    } catch (err) {
+      if (err instanceof DriveApiError && err.status === 401) {
+        driveAuth.onTokenExpired();
+        setFeedback({
+          type: 'error',
+          message:
+            'Phiên Google Drive đã hết hạn. Vui lòng đăng nhập lại để tiếp tục.',
+        });
+      } else {
+        setFeedback({
+          type: 'error',
+          message:
+            err instanceof Error
+              ? err.message
+              : 'Không thể lưu bản sao lưu lên Google Drive.',
+        });
+      }
+    } finally {
+      setIsSyncingDrive(false);
+    }
+  };
+
+  const handleConfirmDriveOverwrite = async (mode: 'overwrite' | 'new') => {
+    if (!driveOverwritePrompt || !driveAuth?.accessToken) return;
+    setIsSyncingDrive(true);
+    try {
+      if (mode === 'overwrite') {
+        await updateDriveFileContent(
+          driveAuth.accessToken,
+          driveOverwritePrompt.existingFile.id,
+          {
+            fileName: driveOverwritePrompt.fileName,
+            mimeType: 'application/json',
+            content: driveOverwritePrompt.content,
+          }
+        );
+        setFeedback({
+          type: 'success',
+          message: `Đã cập nhật (ghi đè) tệp "${driveOverwritePrompt.fileName}" trong "${driveOverwritePrompt.folderName}" trên Google Drive.`,
+        });
+      } else {
+        const tsName = driveOverwritePrompt.fileName.replace(
+          '.json',
+          `-${new Date().toTimeString().slice(0, 5).replace(':', '')}.json`
+        );
+        await uploadFileToDrive(driveAuth.accessToken, {
+          fileName: tsName,
+          mimeType: 'application/json',
+          content: driveOverwritePrompt.content,
+          parentId: driveOverwritePrompt.parentId,
+        });
+        setFeedback({
+          type: 'success',
+          message: `Đã lưu bản sao lưu mới "${tsName}" vào "${driveOverwritePrompt.folderName}" trên Google Drive.`,
+        });
+      }
+      setDriveOverwritePrompt(null);
+    } catch (err) {
+      if (err instanceof DriveApiError && err.status === 401) {
+        driveAuth.onTokenExpired();
+        setFeedback({
+          type: 'error',
+          message:
+            'Phiên Google Drive đã hết hạn. Vui lòng đăng nhập lại để tiếp tục.',
+        });
+      } else {
+        setFeedback({
+          type: 'error',
+          message:
+            err instanceof Error
+              ? err.message
+              : 'Không thể cập nhật tệp trên Google Drive.',
+        });
+      }
+    } finally {
+      setIsSyncingDrive(false);
+    }
   };
 
   return (
@@ -268,8 +438,25 @@ export function SummaryExportView({
       {/* Overview Stat Grid */}
       <section
         aria-label="Thẻ thống kê nhanh"
-        className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 bg-white border border-slate-200 rounded-lg divide-y md:divide-y-0 md:divide-x divide-slate-200"
+        className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 bg-white border border-slate-200 rounded-lg divide-y md:divide-y-0 md:divide-x divide-slate-200"
       >
+        <div className="p-4 space-y-1.5">
+          <p className="text-xs font-medium text-indigo-700">
+            Danh mục Máy / Dự án
+          </p>
+          <p
+            data-testid="summary-machines-total"
+            className="text-2xl font-bold font-mono tabular-nums text-slate-900"
+          >
+            {machineStats.total}
+          </p>
+          <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-600 font-mono tabular-nums">
+            <span>Triển khai: {machineStats.inProgress}</span>
+            <span aria-hidden="true">·</span>
+            <span className="text-emerald-700">Giao: {machineStats.delivered}</span>
+          </div>
+        </div>
+
         <div className="p-4 space-y-1.5">
           <p className="text-xs font-medium text-slate-500">
             Tổng hạng mục công việc
@@ -388,13 +575,22 @@ export function SummaryExportView({
           </p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <button
             type="button"
-            onClick={handleExportWorkplanCsv}
+            onClick={handleExportMachinesCsv}
             className="flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-[#2563EB] hover:bg-blue-700 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
           >
             <FileSpreadsheet className="w-4 h-4 shrink-0" aria-hidden="true" />
+            <span>Xuất CSV Danh mục Máy</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleExportWorkplanCsv}
+            className="flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-semibold text-slate-800 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-slate-600 shrink-0" aria-hidden="true" />
             <span>Xuất CSV Công việc</span>
           </button>
 
@@ -462,6 +658,66 @@ export function SummaryExportView({
             />
           </label>
         </div>
+
+        {driveAuth && (
+          <div className="pt-4 border-t border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-lg bg-blue-50 border border-blue-200 flex items-center justify-center shrink-0 mt-0.5">
+                <Cloud className="w-4 h-4 text-[#2563EB]" aria-hidden="true" />
+              </div>
+              <div>
+                <h4 className="text-sm font-semibold text-slate-900">
+                  Đồng bộ &amp; Sao lưu Google Drive
+                </h4>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {driveAuth.accessToken
+                    ? `Đang kết nối${
+                        driveAuth.userEmail ? ` (${driveAuth.userEmail})` : ''
+                      }. Lưu trực tiếp bản sao lưu JSON vào thư mục "${APP_DRIVE_FOLDER_NAME}".`
+                    : `Kết nối Google Drive để lưu bản sao lưu JSON và báo cáo trực tiếp vào thư mục "${APP_DRIVE_FOLDER_NAME}".`}
+                </p>
+              </div>
+            </div>
+
+            {!driveAuth.accessToken ? (
+              <div className="shrink-0">
+                <GoogleSignInButton
+                  onClick={() => void driveAuth.onSignIn()}
+                  isLoading={driveAuth.isSigningIn}
+                />
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                <button
+                  type="button"
+                  disabled={isSyncingDrive}
+                  onClick={() => void handleQuickBackupToDrive()}
+                  className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-[#2563EB] hover:bg-blue-700 rounded-lg transition-colors cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                >
+                  {isSyncingDrive ? (
+                    <Loader2
+                      className="w-3.5 h-3.5 animate-spin"
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <FileJson className="w-3.5 h-3.5" aria-hidden="true" />
+                  )}
+                  <span>Lưu sao lưu JSON lên Drive</span>
+                </button>
+                {onOpenDriveTab && (
+                  <button
+                    type="button"
+                    onClick={onOpenDriveTab}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    <Cloud className="w-3.5 h-3.5 text-[#2563EB]" aria-hidden="true" />
+                    <span>Mở Google Drive</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </section>
 
       {/* Member Breakdown Table */}
@@ -577,6 +833,11 @@ export function SummaryExportView({
               </p>
               <ul className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-1 text-xs font-mono tabular-nums text-slate-800">
                 <li>• Thành viên nhóm: {pendingRestore.members.length}</li>
+                {pendingRestore.machines && (
+                  <li>
+                    • Danh mục Máy / Dự án: {pendingRestore.machines.length}
+                  </li>
+                )}
                 <li>• Hạng mục công việc: {pendingRestore.tasks.length}</li>
                 <li>
                   • Bản ghi tăng ca: {pendingRestore.overtimeEntries.length}
@@ -606,6 +867,65 @@ export function SummaryExportView({
                 className="px-4 py-2 text-sm font-semibold text-white bg-[#2563EB] rounded-lg hover:bg-blue-700 cursor-pointer"
               >
                 Xác nhận khôi phục
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Drive Overwrite Confirmation Modal */}
+      {driveOverwritePrompt && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="summary-drive-overwrite-title"
+        >
+          <div className="bg-white border border-slate-200 rounded-xl w-full max-w-md overflow-hidden shadow-xl">
+            <div className="px-6 py-4 border-b border-slate-200">
+              <h2
+                id="summary-drive-overwrite-title"
+                className="text-base font-bold text-slate-900"
+              >
+                Bản sao lưu hôm nay đã tồn tại trên Drive
+              </h2>
+            </div>
+            <div className="p-6 text-sm text-slate-700 space-y-2">
+              <p>
+                Thư mục{' '}
+                <strong className="text-slate-900">
+                  {driveOverwritePrompt.folderName}
+                </strong>{' '}
+                đã có tệp{' '}
+                <strong className="font-mono text-slate-900">
+                  {driveOverwritePrompt.fileName}
+                </strong>
+                . Bạn muốn ghi đè bản cũ hay lưu thành tệp mới kèm giờ?
+              </p>
+            </div>
+            <div className="px-6 py-3.5 border-t border-slate-200 flex flex-wrap items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setDriveOverwritePrompt(null)}
+                className="px-3.5 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                disabled={isSyncingDrive}
+                onClick={() => void handleConfirmDriveOverwrite('new')}
+                className="px-3.5 py-2 text-sm font-semibold text-slate-800 bg-slate-100 border border-slate-300 rounded-lg hover:bg-slate-200 cursor-pointer"
+              >
+                Lưu thành tệp mới
+              </button>
+              <button
+                type="button"
+                disabled={isSyncingDrive}
+                onClick={() => void handleConfirmDriveOverwrite('overwrite')}
+                className="px-4 py-2 text-sm font-semibold text-white bg-[#2563EB] rounded-lg hover:bg-blue-700 cursor-pointer"
+              >
+                Ghi đè bản hiện có
               </button>
             </div>
           </div>

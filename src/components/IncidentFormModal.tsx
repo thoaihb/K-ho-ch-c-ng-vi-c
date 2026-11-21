@@ -1,7 +1,8 @@
-import { ChangeEvent, FormEvent, useEffect, useState } from 'react';
+import { ChangeEvent, FormEvent, useEffect, useRef, useState } from 'react';
 import {
   Check,
   Circle,
+  Cloud,
   Paperclip,
   Plus,
   Trash2,
@@ -10,18 +11,30 @@ import {
 } from 'lucide-react';
 import {
   AttachmentItem,
+  DriveAuthProps,
   INCIDENT_STATUSES,
   IncidentEntry,
   IncidentStatus,
+  MachineProject,
   TeamMember,
 } from '../types/workplan';
+import { findMachineForRecord } from '../utils/machines';
 import { formatFileSize, getTodayIsoDate } from '../utils/workplan';
+import { DrivePickerModal } from './DrivePickerModal';
+import {
+  MachineSelectWithQuickAdd,
+  QuickAddMachineInput,
+} from './MachineSelectWithQuickAdd';
 
 interface IncidentFormModalProps {
   isOpen: boolean;
   editingEntry: IncidentEntry | null;
+  defaultMachineId?: string;
   members: TeamMember[];
+  machines: MachineProject[];
+  driveAuth?: DriveAuthProps;
   onClose: () => void;
+  onQuickCreateMachine: (data: QuickAddMachineInput) => MachineProject;
   onSave: (data: Omit<IncidentEntry, 'id'>, existingId?: string) => void;
 }
 
@@ -30,12 +43,17 @@ const MAX_INLINE_FILE_BYTES = 512 * 1024;
 export function IncidentFormModal({
   isOpen,
   editingEntry,
+  defaultMachineId,
   members,
+  machines,
+  driveAuth,
   onClose,
+  onQuickCreateMachine,
   onSave,
 }: IncidentFormModalProps) {
   const [occurredAt, setOccurredAt] = useState(getTodayIsoDate());
   const [repairTime, setRepairTime] = useState('');
+  const [machineId, setMachineId] = useState('');
   const [machineName, setMachineName] = useState('');
   const [description, setDescription] = useState('');
   const [resolution, setResolution] = useState('');
@@ -44,33 +62,52 @@ export function IncidentFormModal({
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
   const [customFileName, setCustomFileName] = useState('');
   const [fileNotice, setFileNotice] = useState('');
+  const [isDrivePickerOpen, setIsDrivePickerOpen] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const machinesRef = useRef(machines);
+  machinesRef.current = machines;
+  const membersRef = useRef(members);
+  membersRef.current = members;
 
   useEffect(() => {
     if (!isOpen) return;
+    const currentMachines = machinesRef.current;
+    const currentMembers = membersRef.current;
     if (editingEntry) {
+      const matched = findMachineForRecord(
+        currentMachines,
+        editingEntry.machineId,
+        editingEntry.machineName
+      );
       setOccurredAt(editingEntry.occurredAt);
       setRepairTime(editingEntry.repairTime ?? '');
-      setMachineName(editingEntry.machineName);
+      setMachineId(matched?.id ?? editingEntry.machineId ?? '');
+      setMachineName(matched?.name ?? editingEntry.machineName);
       setDescription(editingEntry.description);
       setResolution(editingEntry.resolution);
       setAssigneeId(editingEntry.assigneeId);
       setStatus(editingEntry.status);
       setAttachments(editingEntry.attachments ?? []);
     } else {
+      const preselected = defaultMachineId
+        ? currentMachines.find((m) => m.id === defaultMachineId)
+        : undefined;
       setOccurredAt(getTodayIsoDate());
       setRepairTime('');
-      setMachineName('');
+      setMachineId(preselected?.id ?? '');
+      setMachineName(preselected?.name ?? '');
       setDescription('');
       setResolution('');
-      setAssigneeId(members[0]?.id ?? '');
+      setAssigneeId(currentMembers[0]?.id ?? '');
       setStatus('Đang xử lý');
       setAttachments([]);
     }
     setCustomFileName('');
     setFileNotice('');
+    setIsDrivePickerOpen(false);
     setErrors({});
-  }, [isOpen, editingEntry, members]);
+  }, [isOpen, editingEntry, defaultMachineId]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -165,7 +202,7 @@ export function IncidentFormModal({
       nextErrors.occurredAt = 'Vui lòng chọn ngày gặp lỗi.';
     }
     if (!machineName.trim()) {
-      nextErrors.machineName = 'Vui lòng nhập tên máy hoặc cụm máy.';
+      nextErrors.machineName = 'Vui lòng chọn máy hoặc cụm máy từ danh mục.';
     }
     if (!description.trim()) {
       nextErrors.description = 'Vui lòng mô tả chi tiết lỗi phát sinh.';
@@ -183,6 +220,7 @@ export function IncidentFormModal({
       {
         occurredAt,
         repairTime: repairTime.trim(),
+        ...(machineId ? { machineId } : {}),
         machineName: machineName.trim(),
         description: description.trim(),
         resolution: resolution.trim(),
@@ -285,25 +323,19 @@ export function IncidentFormModal({
             </div>
           </div>
 
-          <div>
-            <label
-              htmlFor="inc-machine"
-              className="block text-xs font-semibold text-slate-700 mb-1.5"
-            >
-              Tên máy / Cụm máy <span className="text-red-600">*</span>
-            </label>
-            <input
-              id="inc-machine"
-              type="text"
-              placeholder="Ví dụ: Tủ điện phân phối MCC — Biến tần G120C"
-              value={machineName}
-              onChange={(e) => setMachineName(e.target.value)}
-              className="w-full h-10 px-3 text-sm bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
-            />
-            {errors.machineName && (
-              <p className="mt-1 text-xs text-red-600">{errors.machineName}</p>
-            )}
-          </div>
+          <MachineSelectWithQuickAdd
+            id="inc-machine"
+            label="Tên máy / Cụm máy"
+            machines={machines}
+            selectedMachineId={machineId}
+            legacyFallbackName={machineName}
+            error={errors.machineName}
+            onChange={(sel) => {
+              setMachineId(sel.machineId);
+              setMachineName(sel.machineName);
+            }}
+            onQuickCreateMachine={onQuickCreateMachine}
+          />
 
           <div>
             <label
@@ -346,7 +378,7 @@ export function IncidentFormModal({
             <span className="block text-xs font-semibold text-slate-700 mb-1.5">
               File đính kèm (Ảnh hiện trường, ảnh sau khắc phục, tài liệu PDF...)
             </span>
-            <div className="flex flex-col sm:flex-row gap-2">
+            <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2">
               <label className="inline-flex items-center justify-center gap-2 px-3.5 h-10 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-300 rounded-lg hover:bg-slate-100 cursor-pointer shrink-0">
                 <Upload className="w-4 h-4 text-slate-500" aria-hidden="true" />
                 <span>Tải file lên</span>
@@ -359,7 +391,18 @@ export function IncidentFormModal({
                 />
               </label>
 
-              <div className="flex-1 flex gap-2">
+              {driveAuth && (
+                <button
+                  type="button"
+                  onClick={() => setIsDrivePickerOpen(true)}
+                  className="inline-flex items-center justify-center gap-2 px-3.5 h-10 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 cursor-pointer shrink-0"
+                >
+                  <Cloud className="w-4 h-4 text-[#2563EB]" aria-hidden="true" />
+                  <span>Chọn từ Drive</span>
+                </button>
+              )}
+
+              <div className="flex-1 min-w-[220px] flex gap-2">
                 <input
                   type="text"
                   aria-label="Hoặc nhập tên tài liệu / đường dẫn"
@@ -479,6 +522,20 @@ export function IncidentFormModal({
           </div>
         </form>
       </div>
+
+      {driveAuth && (
+        <DrivePickerModal
+          isOpen={isDrivePickerOpen}
+          accessToken={driveAuth.accessToken}
+          isSigningIn={driveAuth.isSigningIn}
+          onSignIn={driveAuth.onSignIn}
+          onTokenExpired={driveAuth.onTokenExpired}
+          onClose={() => setIsDrivePickerOpen(false)}
+          onSelectFiles={(chosen) =>
+            setAttachments((prev) => [...prev, ...chosen])
+          }
+        />
+      )}
     </div>
   );
 }

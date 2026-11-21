@@ -6,12 +6,14 @@ import {
   IncidentStatus,
   IncidentSummaryStats,
   MATERIAL_STATUSES,
+  MachineProject,
   MaterialFilter,
   MaterialItem,
   MaterialStatus,
   MaterialSummaryStats,
   TeamMember,
 } from '../types/workplan';
+import { matchesMachineFilter } from './machines';
 import { escapeCsvCell } from './overtime';
 import { StorageLike, formatDateVi } from './workplan';
 
@@ -157,7 +159,8 @@ export function createIncidentId(): string {
 
 export function filterMaterials(
   items: MaterialItem[],
-  filter: MaterialFilter
+  filter: MaterialFilter,
+  machines: MachineProject[] = []
 ): MaterialItem[] {
   const query = filter.search.trim().toLowerCase();
   return items.filter((item) => {
@@ -165,8 +168,14 @@ export function filterMaterials(
       return false;
     }
     if (
-      filter.projectName !== 'all' &&
-      item.projectName !== filter.projectName
+      filter.machineId &&
+      filter.machineId !== 'all' &&
+      !matchesMachineFilter(
+        filter.machineId,
+        machines,
+        item.machineId,
+        item.projectName
+      )
     ) {
       return false;
     }
@@ -215,7 +224,8 @@ export function computeMaterialStats(
 export function filterIncidents(
   entries: IncidentEntry[],
   filter: IncidentFilter,
-  members: TeamMember[] = []
+  members: TeamMember[] = [],
+  machines: MachineProject[] = []
 ): IncidentEntry[] {
   const query = filter.search.trim().toLowerCase();
   const memberMap = new Map(members.map((m) => [m.id, m.name.toLowerCase()]));
@@ -225,6 +235,18 @@ export function filterIncidents(
       return false;
     }
     if (filter.assigneeId !== 'all' && entry.assigneeId !== filter.assigneeId) {
+      return false;
+    }
+    if (
+      filter.machineId &&
+      filter.machineId !== 'all' &&
+      !matchesMachineFilter(
+        filter.machineId,
+        machines,
+        entry.machineId,
+        entry.machineName
+      )
+    ) {
       return false;
     }
     if (query) {
@@ -292,6 +314,9 @@ export function normalizeStoredMaterial(item: unknown): MaterialItem | null {
     specCode: c.specCode,
     quantity: Math.max(1, Math.round(c.quantity * 100) / 100),
     unit: typeof c.unit === 'string' && c.unit.trim() ? c.unit : 'Cái',
+    ...(typeof c.machineId === 'string' && c.machineId
+      ? { machineId: c.machineId }
+      : {}),
     projectName: c.projectName,
     status: c.status as MaterialStatus,
     notes: typeof c.notes === 'string' ? c.notes : '',
@@ -340,6 +365,9 @@ export function normalizeStoredIncident(item: unknown): IncidentEntry | null {
     id: c.id,
     occurredAt: c.occurredAt,
     repairTime: typeof c.repairTime === 'string' ? c.repairTime : '',
+    ...(typeof c.machineId === 'string' && c.machineId
+      ? { machineId: c.machineId }
+      : {}),
     machineName: c.machineName,
     description: c.description,
     resolution: typeof c.resolution === 'string' ? c.resolution : '',

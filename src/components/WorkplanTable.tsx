@@ -10,11 +10,13 @@ import {
 } from 'lucide-react';
 import {
   AttachmentItem,
+  MachineProject,
   TASK_STATUSES,
   TaskStatus,
   TeamMember,
   WorkTask,
 } from '../types/workplan';
+import { findMachineForRecord } from '../utils/machines';
 import { formatDateVi, formatFileSize, isTaskOverdue } from '../utils/workplan';
 import { ProgressControl } from './ProgressControl';
 
@@ -22,11 +24,13 @@ interface WorkplanTableProps {
   tasks: WorkTask[];
   totalTaskCount: number;
   members: TeamMember[];
+  machines: MachineProject[];
   onStatusChange: (taskId: string, status: TaskStatus) => void;
   onProgressChange: (taskId: string, progress: number) => void;
   onEditTask: (task: WorkTask) => void;
   onDeleteTask: (task: WorkTask) => void;
   onPreviewAttachment: (attachment: AttachmentItem) => void;
+  onOpenMachineDetail: (machine: MachineProject) => void;
   onOpenAddModal: () => void;
   onResetFilter: () => void;
 }
@@ -48,11 +52,13 @@ export function WorkplanTable({
   tasks,
   totalTaskCount,
   members,
+  machines,
   onStatusChange,
   onProgressChange,
   onEditTask,
   onDeleteTask,
   onPreviewAttachment,
+  onOpenMachineDetail,
   onOpenAddModal,
   onResetFilter,
 }: WorkplanTableProps) {
@@ -144,6 +150,11 @@ export function WorkplanTable({
           <tbody className="divide-y divide-slate-200">
             {tasks.map((task, index) => {
               const assignee = memberMap.get(task.assigneeId);
+              const linkedMachine = findMachineForRecord(
+                machines,
+                task.machineId,
+                task.mainContent
+              );
               const overdue = isTaskOverdue(task);
               const rowNumber = index + 1;
 
@@ -161,8 +172,19 @@ export function WorkplanTable({
                     {formatDateVi(task.createdAt)}
                   </td>
 
-                  <td className="py-3 px-2 text-[13px] font-semibold text-slate-900 leading-snug">
-                    {task.mainContent}
+                  <td className="py-3 px-2 text-[13px] font-semibold leading-snug">
+                    {linkedMachine ? (
+                      <button
+                        type="button"
+                        onClick={() => onOpenMachineDetail(linkedMachine)}
+                        className="text-left text-[#2563EB] hover:text-blue-800 hover:underline cursor-pointer"
+                        title="Xem hồ sơ tổng hợp của máy"
+                      >
+                        {linkedMachine.name}
+                      </button>
+                    ) : (
+                      <span className="text-slate-900">{task.mainContent}</span>
+                    )}
                   </td>
 
                   <td className="py-3 px-2 text-slate-600 text-xs leading-relaxed whitespace-pre-line">
@@ -309,6 +331,11 @@ export function WorkplanTable({
       <div className="md:hidden divide-y divide-slate-200">
         {tasks.map((task, index) => {
           const assignee = memberMap.get(task.assigneeId);
+          const linkedMachine = findMachineForRecord(
+            machines,
+            task.machineId,
+            task.mainContent
+          );
           const overdue = isTaskOverdue(task);
           const rowNumber = index + 1;
 
@@ -322,7 +349,17 @@ export function WorkplanTable({
                     <span>Tạo: {formatDateVi(task.createdAt)}</span>
                   </div>
                   <h3 className="mt-1 text-sm font-semibold text-slate-900">
-                    {task.mainContent}
+                    {linkedMachine ? (
+                      <button
+                        type="button"
+                        onClick={() => onOpenMachineDetail(linkedMachine)}
+                        className="text-left text-[#2563EB] underline"
+                      >
+                        {linkedMachine.name}
+                      </button>
+                    ) : (
+                      task.mainContent
+                    )}
                   </h3>
                 </div>
 

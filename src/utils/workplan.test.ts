@@ -44,10 +44,10 @@ test('isTaskOverdue flags past due tasks unless status is Hoàn thành', () => {
   );
 });
 
-test('filterTasks filters by status, assigneeId, search query, and combinations', () => {
+test('filterTasks filters by status, assigneeId, machineId, search query, and combinations', () => {
   const byStatus = filterTasks(
     DEFAULT_WORK_TASKS,
-    { status: 'Hoàn thành', assigneeId: 'all', search: '' },
+    { status: 'Hoàn thành', assigneeId: 'all', machineId: 'all', search: '' },
     DEFAULT_TEAM_MEMBERS
   );
   assert.equal(byStatus.length, 2);
@@ -55,15 +55,28 @@ test('filterTasks filters by status, assigneeId, search query, and combinations'
 
   const byAssignee = filterTasks(
     DEFAULT_WORK_TASKS,
-    { status: 'all', assigneeId: 'mem-1', search: '' },
+    { status: 'all', assigneeId: 'mem-1', machineId: 'all', search: '' },
     DEFAULT_TEAM_MEMBERS
   );
   assert.equal(byAssignee.length, 1);
   assert.equal(byAssignee[0].id, 'task-1');
 
+  const byMachineName = filterTasks(
+    DEFAULT_WORK_TASKS,
+    {
+      status: 'all',
+      assigneeId: 'all',
+      machineId: 'name:Lập trình PLC S7-1500 trạm cấp phôi tự động',
+      search: '',
+    },
+    DEFAULT_TEAM_MEMBERS
+  );
+  assert.equal(byMachineName.length, 1);
+  assert.equal(byMachineName[0].id, 'task-1');
+
   const bySearch = filterTasks(
     DEFAULT_WORK_TASKS,
-    { status: 'all', assigneeId: 'all', search: 'camera' },
+    { status: 'all', assigneeId: 'all', machineId: 'all', search: 'camera' },
     DEFAULT_TEAM_MEMBERS
   );
   assert.equal(bySearch.length, 1);
@@ -71,7 +84,12 @@ test('filterTasks filters by status, assigneeId, search query, and combinations'
 
   const combined = filterTasks(
     DEFAULT_WORK_TASKS,
-    { status: 'Đang thực hiện', assigneeId: 'mem-5', search: 'FAT' },
+    {
+      status: 'Đang thực hiện',
+      assigneeId: 'mem-5',
+      machineId: 'all',
+      search: 'FAT',
+    },
     DEFAULT_TEAM_MEMBERS
   );
   assert.equal(combined.length, 1);

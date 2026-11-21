@@ -11,19 +11,23 @@ import {
 } from 'lucide-react';
 import {
   MATERIAL_STATUSES,
+  MachineProject,
   MaterialFilter,
   MaterialItem,
   MaterialStatus,
 } from '../types/workplan';
+import { findMachineForRecord, normalizeMachineName } from '../utils/machines';
 import { computeMaterialStats, filterMaterials } from '../utils/operations';
 import { formatDateVi } from '../utils/workplan';
 
 interface MaterialsViewProps {
   items: MaterialItem[];
+  machines: MachineProject[];
   onOpenAddModal: () => void;
   onEditItem: (item: MaterialItem) => void;
   onStatusChange: (id: string, status: MaterialStatus) => void;
   onDeleteItem: (id: string) => void;
+  onOpenMachineDetail: (machine: MachineProject) => void;
 }
 
 function getMaterialStatusStyle(
@@ -44,35 +48,46 @@ function getMaterialStatusStyle(
 
 export function MaterialsView({
   items,
+  machines,
   onOpenAddModal,
   onEditItem,
   onStatusChange,
   onDeleteItem,
+  onOpenMachineDetail,
 }: MaterialsViewProps) {
   const [filter, setFilter] = useState<MaterialFilter>({
     status: 'all',
-    projectName: 'all',
+    machineId: 'all',
     search: '',
   });
   const [deletingItem, setDeletingItem] = useState<MaterialItem | null>(null);
 
-  const projectNames = useMemo(() => {
-    const set = new Set<string>();
+  const unlinkedProjectNames = useMemo(() => {
+    const machineNames = new Set(
+      machines.map((m) => normalizeMachineName(m.name))
+    );
+    const extra = new Set<string>();
     for (const item of items) {
-      if (item.projectName.trim()) set.add(item.projectName.trim());
+      if (
+        item.projectName.trim() &&
+        !item.machineId &&
+        !machineNames.has(normalizeMachineName(item.projectName))
+      ) {
+        extra.add(item.projectName.trim());
+      }
     }
-    return Array.from(set).sort((a, b) => a.localeCompare(b, 'vi'));
-  }, [items]);
+    return Array.from(extra).sort((a, b) => a.localeCompare(b, 'vi'));
+  }, [items, machines]);
 
   const stats = useMemo(() => computeMaterialStats(items), [items]);
   const filteredItems = useMemo(
-    () => filterMaterials(items, filter),
-    [items, filter]
+    () => filterMaterials(items, filter, machines),
+    [items, filter, machines]
   );
 
   const hasActiveFilter =
     filter.status !== 'all' ||
-    filter.projectName !== 'all' ||
+    filter.machineId !== 'all' ||
     filter.search.trim().length > 0;
 
   return (
@@ -156,19 +171,24 @@ export function MaterialsView({
               htmlFor="mat-filter-project"
               className="text-xs font-medium text-slate-600 whitespace-nowrap"
             >
-              Dự án/Máy:
+              Máy / Dự án:
             </label>
             <select
               id="mat-filter-project"
-              value={filter.projectName}
+              value={filter.machineId}
               onChange={(e) =>
-                setFilter((prev) => ({ ...prev, projectName: e.target.value }))
+                setFilter((prev) => ({ ...prev, machineId: e.target.value }))
               }
-              className="h-9 px-3 text-sm bg-white border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
+              className="h-9 max-w-[240px] px-3 text-sm bg-white border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
             >
-              <option value="all">Tất cả dự án / máy</option>
-              {projectNames.map((proj) => (
-                <option key={proj} value={proj}>
+              <option value="all">Tất cả máy / dự án</option>
+              {machines.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.code} — {m.name}
+                </option>
+              ))}
+              {unlinkedProjectNames.map((proj) => (
+                <option key={proj} value={`name:${proj}`}>
                   {proj}
                 </option>
               ))}
@@ -202,7 +222,7 @@ export function MaterialsView({
             <button
               type="button"
               onClick={() =>
-                setFilter({ status: 'all', projectName: 'all', search: '' })
+                setFilter({ status: 'all', machineId: 'all', search: '' })
               }
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
             >
@@ -231,7 +251,7 @@ export function MaterialsView({
               <button
                 type="button"
                 onClick={() =>
-                  setFilter({ status: 'all', projectName: 'all', search: '' })
+                  setFilter({ status: 'all', machineId: 'all', search: '' })
                 }
                 className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 cursor-pointer"
               >
@@ -283,7 +303,13 @@ export function MaterialsView({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
-                {filteredItems.map((item, idx) => (
+                {filteredItems.map((item, idx) => {
+                  const linkedMachine = findMachineForRecord(
+                    machines,
+                    item.machineId,
+                    item.projectName
+                  );
+                  return (
                   <tr
                     key={item.id}
                     className="align-top hover:bg-slate-50/70 transition-colors"
@@ -307,8 +333,18 @@ export function MaterialsView({
                     <td className="py-3.5 px-3 text-right font-mono tabular-nums text-xs font-semibold text-slate-900 whitespace-nowrap">
                       {item.quantity} {item.unit}
                     </td>
-                    <td className="py-3.5 px-3 text-xs font-medium text-slate-800 leading-snug">
-                      {item.projectName}
+                    <td className="py-3.5 px-3 text-xs font-medium leading-snug">
+                      {linkedMachine ? (
+                        <button
+                          type="button"
+                          onClick={() => onOpenMachineDetail(linkedMachine)}
+                          className="text-left text-[#2563EB] hover:text-blue-800 hover:underline cursor-pointer font-semibold"
+                        >
+                          {linkedMachine.name}
+                        </button>
+                      ) : (
+                        <span className="text-slate-800">{item.projectName}</span>
+                      )}
                     </td>
                     <td className="py-2.5 px-3">
                       <div
@@ -364,8 +400,9 @@ export function MaterialsView({
                         </button>
                       </div>
                     </td>
-                  </tr>
-                ))}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -408,9 +445,26 @@ export function MaterialsView({
 
                 <div className="text-xs">
                   <span className="text-slate-500">Dự án / Máy: </span>
-                  <span className="font-medium text-slate-900">
-                    {item.projectName}
-                  </span>
+                  {(() => {
+                    const linkedMachine = findMachineForRecord(
+                      machines,
+                      item.machineId,
+                      item.projectName
+                    );
+                    return linkedMachine ? (
+                      <button
+                        type="button"
+                        onClick={() => onOpenMachineDetail(linkedMachine)}
+                        className="font-semibold text-[#2563EB] underline text-left"
+                      >
+                        {linkedMachine.name}
+                      </button>
+                    ) : (
+                      <span className="font-medium text-slate-900">
+                        {item.projectName}
+                      </span>
+                    );
+                  })()}
                 </div>
 
                 <div
