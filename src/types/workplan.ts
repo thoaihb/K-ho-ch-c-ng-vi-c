@@ -18,10 +18,38 @@ export interface AttachmentItem {
   addedAt: string;
 }
 
+export type PermissionAction = 'view' | 'add' | 'edit' | 'delete';
+
+export type ModuleKey =
+  | 'machines'
+  | 'workplan'
+  | 'overtime'
+  | 'materials'
+  | 'incidents'
+  | 'audit'
+  | 'drive'
+  | 'summary';
+
+export interface ModulePermissionRule {
+  view: boolean;
+  add: boolean;
+  edit: boolean;
+  delete: boolean;
+}
+
+export type UserPermissions = Record<ModuleKey, ModulePermissionRule>;
+
 export interface TeamMember {
   id: string;
   name: string;
   role: string;
+  username: string;
+  password?: string;
+  email?: string;
+  isAdmin: boolean;
+  isLocked?: boolean;
+  avatarColor?: string;
+  permissions?: Partial<UserPermissions>;
 }
 
 export interface WorkTask {
@@ -31,7 +59,8 @@ export interface WorkTask {
   mainContent: string;
   detailContent: string;
   targetDate: string; // YYYY-MM-DD
-  assigneeId: string;
+  assigneeId: string; // Primary assignee ID
+  assigneeIds?: string[]; // Multiple assigned member IDs
   status: TaskStatus;
   progress: number; // 0 - 100
   attachments: AttachmentItem[];
@@ -60,6 +89,7 @@ export type AppSection =
   | 'overtime'
   | 'materials'
   | 'incidents'
+  | 'audit'
   | 'drive'
   | 'summary';
 
@@ -217,6 +247,54 @@ export interface IncidentSummaryStats {
   resolved: number;
 }
 
+export type AuditAction =
+  | 'create'
+  | 'update'
+  | 'delete'
+  | 'status_change'
+  | 'progress_change'
+  | 'progress_update'
+  | 'assign'
+  | 'permission_change'
+  | 'login'
+  | 'export'
+  | 'import';
+
+export type AuditTargetType =
+  | 'machine'
+  | 'task'
+  | 'material'
+  | 'incident'
+  | 'overtime'
+  | 'member'
+  | 'system';
+
+export interface AuditLogEntry {
+  id: string;
+  timestamp: string; // ISO datetime string
+  formattedTime: string; // DD/MM/YYYY HH:mm:ss
+  userId: string;
+  userName: string;
+  userUsername: string;
+  action: AuditAction;
+  targetType: AuditTargetType;
+  targetId: string;
+  targetName: string;
+  machineCode?: string;
+  machineName?: string;
+  details: string;
+}
+
+export interface AuditFilter {
+  userId: string; // 'all' or userId
+  targetType: 'all' | AuditTargetType;
+  machineId: string; // 'all' or machineId
+  action: 'all' | AuditAction;
+  startDate: string; // YYYY-MM-DD or ''
+  endDate: string; // YYYY-MM-DD or ''
+  search: string;
+}
+
 export interface WorkspaceBackupPayload {
   version: number;
   exportedAt: string;
@@ -226,6 +304,7 @@ export interface WorkspaceBackupPayload {
   overtimeEntries: OvertimeEntry[];
   materials?: MaterialItem[];
   incidents?: IncidentEntry[];
+  auditLogs?: AuditLogEntry[];
 }
 
 export interface DriveAuthProps {
@@ -235,5 +314,6 @@ export interface DriveAuthProps {
   onSignIn: () => Promise<void>;
   onTokenExpired: () => void;
 }
+
 
 

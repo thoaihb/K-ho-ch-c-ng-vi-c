@@ -9,6 +9,7 @@ interface ProgressControlProps {
   status: TaskStatus;
   progress: number;
   isOpen: boolean;
+  disabled?: boolean;
   onToggleOpen: (taskId: string | null) => void;
   onChangeProgress: (taskId: string, progress: number) => void;
 }
@@ -25,6 +26,7 @@ export function ProgressControl({
   status,
   progress,
   isOpen,
+  disabled,
   onToggleOpen,
   onChangeProgress,
 }: ProgressControlProps) {
@@ -100,10 +102,23 @@ export function ProgressControl({
       <button
         ref={triggerRef}
         type="button"
+        disabled={disabled}
         aria-expanded={isOpen}
         aria-label={`Tiến độ "${taskName}": ${safeProgress}%. Bấm để điều chỉnh`}
-        onClick={() => onToggleOpen(isOpen ? null : taskId)}
-        className="relative w-full h-7 rounded-md bg-slate-100 border border-slate-200 hover:border-slate-300 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-blue-700 overflow-hidden cursor-pointer transition-colors block"
+        title={
+          disabled
+            ? 'Chỉ thành viên được phân công hoặc Quản trị viên mới được điều chỉnh tiến độ'
+            : `Tiến độ: ${safeProgress}%. Bấm để điều chỉnh`
+        }
+        onClick={() => {
+          if (disabled) return;
+          onToggleOpen(isOpen ? null : taskId);
+        }}
+        className={`relative w-full h-7 rounded-md bg-slate-100 border border-slate-200 overflow-hidden block transition-colors ${
+          disabled
+            ? 'opacity-70 cursor-not-allowed'
+            : 'hover:border-slate-300 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-blue-700 cursor-pointer'
+        }`}
       >
         <div
           className={`h-full transition-all duration-150 ${fillClass}`}

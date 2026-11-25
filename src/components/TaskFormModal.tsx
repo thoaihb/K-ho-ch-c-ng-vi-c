@@ -21,6 +21,7 @@ import {
   MachineSelectWithQuickAdd,
   QuickAddMachineInput,
 } from './MachineSelectWithQuickAdd';
+import { getInitials } from '../utils/rbac';
 
 interface TaskFormModalProps {
   isOpen: boolean;
@@ -53,6 +54,7 @@ export function TaskFormModal({
   const [detailContent, setDetailContent] = useState('');
   const [targetDate, setTargetDate] = useState('');
   const [assigneeId, setAssigneeId] = useState('');
+  const [assigneeIds, setAssigneeIds] = useState<string[]>([]);
   const [status, setStatus] = useState<TaskStatus>('Đang thực hiện');
   const [progress, setProgress] = useState<number>(0);
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
@@ -77,12 +79,19 @@ export function TaskFormModal({
         editingTask.machineId,
         editingTask.mainContent
       );
+      const initialAssignees =
+        editingTask.assigneeIds && editingTask.assigneeIds.length > 0
+          ? editingTask.assigneeIds
+          : editingTask.assigneeId
+          ? [editingTask.assigneeId]
+          : [];
       setCreatedAt(editingTask.createdAt);
       setMachineId(matched?.id ?? editingTask.machineId ?? '');
       setMainContent(matched?.name ?? editingTask.mainContent);
       setDetailContent(editingTask.detailContent);
       setTargetDate(editingTask.targetDate);
-      setAssigneeId(editingTask.assigneeId);
+      setAssigneeId(initialAssignees[0] ?? editingTask.assigneeId ?? '');
+      setAssigneeIds(initialAssignees);
       setStatus(editingTask.status);
       setProgress(clampProgress(editingTask.progress));
       setAttachments(editingTask.attachments);
@@ -91,12 +100,15 @@ export function TaskFormModal({
       const preselected = defaultMachineId
         ? currentMachines.find((m) => m.id === defaultMachineId)
         : undefined;
+      const initialMemberId = currentMembers[0]?.id ?? '';
+      const initialAssignees = initialMemberId ? [initialMemberId] : [];
       setCreatedAt(getTodayIsoDate());
       setMachineId(preselected?.id ?? '');
       setMainContent(preselected?.name ?? '');
       setDetailContent('');
       setTargetDate('');
-      setAssigneeId(currentMembers[0]?.id ?? '');
+      setAssigneeId(initialMemberId);
+      setAssigneeIds(initialAssignees);
       setStatus('Đang thực hiện');
       setProgress(0);
       setAttachments([]);
@@ -195,14 +207,21 @@ export function TaskFormModal({
     if (!targetDate) {
       nextErrors.targetDate = 'Vui lòng chọn ngày kế hoạch hoàn thành.';
     }
-    if (!assigneeId) {
-      nextErrors.assigneeId = 'Vui lòng chọn người đảm nhận.';
+    if (assigneeIds.length === 0 && !assigneeId) {
+      nextErrors.assigneeId = 'Vui lòng chọn ít nhất một người đảm nhận.';
     }
 
     if (Object.keys(nextErrors).length > 0) {
       setErrors(nextErrors);
       return;
     }
+
+    const effectiveAssignees =
+      assigneeIds.length > 0
+        ? assigneeIds
+        : assigneeId
+        ? [assigneeId]
+        : [];
 
     onSave(
       {
@@ -211,7 +230,8 @@ export function TaskFormModal({
         mainContent: mainContent.trim(),
         detailContent: detailContent.trim(),
         targetDate,
-        assigneeId,
+        assigneeId: effectiveAssignees[0] ?? '',
+        assigneeIds: effectiveAssignees,
         status,
         progress: clampProgress(progress),
         attachments,
@@ -319,69 +339,139 @@ export function TaskFormModal({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
-            <div className="sm:col-span-5">
-              <label
-                htmlFor="task-assignee"
-                className="block text-xs font-semibold text-slate-700 mb-1.5"
+            <div className="sm:col-span-6">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="block text-xs font-semibold text-slate-700">
+                  Người đảm nhận ({assigneeIds.length}) <span className="text-red-600">*</span>
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const allIds = members.map((m) => m.id);
+                      setAssigneeIds(allIds);
+                      setAssigneeId(allIds[0] ?? '');
+                      if (errors.assigneeId) {
+                        setErrors((prev) => {
+                          const next = { ...prev };
+                          delete next.assigneeId;
+                          return next;
+                        });
+                      }
+                    }}
+                    className="text-[11px] text-blue-700 hover:underline cursor-pointer"
+                  >
+                    Tất cả
+                  </button>
+                  <span className="text-slate-300">|</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAssigneeIds([]);
+                      setAssigneeId('');
+                    }}
+                    className="text-[11px] text-slate-500 hover:text-slate-700 hover:underline cursor-pointer"
+                  >
+                    Bỏ chọn
+                  </button>
+                </div>
+              </div>
+              <div
+                tabIndex={0}
+                aria-label="Danh sách thành viên đảm nhận công việc"
+                className="border border-slate-300 rounded-lg p-2 max-h-44 overflow-y-auto bg-slate-50/50 space-y-1 focus:outline-none focus:ring-2 focus:ring-blue-700/20 focus:border-blue-700"
               >
-                Người đảm nhận <span className="text-red-600">*</span>
-              </label>
-              <select
-                id="task-assignee"
-                value={assigneeId}
-                onChange={(e) => setAssigneeId(e.target.value)}
-                className="w-full h-10 px-3 text-sm bg-white border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-700/20 focus:border-blue-700"
-              >
-                <option value="">-- Chọn thành viên nhóm --</option>
-                {members.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name} ({m.role})
-                  </option>
-                ))}
-              </select>
+                {members.map((m) => {
+                  const isChecked = assigneeIds.includes(m.id);
+                  return (
+                    <label
+                      key={m.id}
+                      className={`flex items-center gap-2.5 px-2.5 py-1.5 rounded-md cursor-pointer transition-colors text-xs select-none ${
+                        isChecked
+                          ? 'bg-blue-50 text-blue-900 font-medium'
+                          : 'hover:bg-slate-100 text-slate-700'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => {
+                          setAssigneeIds((prev) => {
+                            const next = prev.includes(m.id)
+                              ? prev.filter((id) => id !== m.id)
+                              : [...prev, m.id];
+                            setAssigneeId(next[0] ?? '');
+                            return next;
+                          });
+                          if (errors.assigneeId) {
+                            setErrors((prev) => {
+                              const next = { ...prev };
+                              delete next.assigneeId;
+                              return next;
+                            });
+                          }
+                        }}
+                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
+                      />
+                      <span
+                        className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0"
+                        style={{ backgroundColor: m.avatarColor || '#2563EB' }}
+                      >
+                        {getInitials(m.name)}
+                      </span>
+                      <span className="truncate">{m.name}</span>
+                      <span className="text-[11px] text-slate-400 font-normal truncate">
+                        ({m.role})
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
               {errors.assigneeId && (
                 <p className="mt-1 text-xs text-red-600">{errors.assigneeId}</p>
               )}
             </div>
 
-            <div className="sm:col-span-7">
-              <span className="block text-xs font-semibold text-slate-700 mb-1.5">
-                Trạng thái <span className="text-red-600">*</span>
-              </span>
-              <div
-                role="radiogroup"
-                aria-label="Chọn trạng thái công việc"
-                className="grid grid-cols-3 gap-1.5"
-              >
-                {TASK_STATUSES.map((option) => {
-                  const selected = status === option;
-                  return (
-                    <button
-                      key={option}
-                      type="button"
-                      role="radio"
-                      aria-checked={selected}
-                      onClick={() => {
-                        setStatus(option);
-                        setProgress((prev) =>
-                          resolveProgressForStatus(prev, option)
-                        );
-                      }}
-                      className={`h-10 px-2 flex items-center justify-center gap-1 text-xs rounded-lg border transition-colors cursor-pointer whitespace-nowrap ${
-                        selected
-                          ? 'bg-blue-50 border-blue-600 text-blue-800 font-semibold'
-                          : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
-                      }`}
-                    >
-                      {selected ? (
-                        <Check className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-                      ) : (
-                        <Circle className="w-3.5 h-3.5 shrink-0 text-slate-300" aria-hidden="true" />
-                      )}
-                      <span>{option}</span>
-                    </button>
-                  );
-                })}
+            <div className="sm:col-span-6 flex flex-col justify-between">
+              <div>
+                <span className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Trạng thái <span className="text-red-600">*</span>
+                </span>
+                <div
+                  role="radiogroup"
+                  aria-label="Chọn trạng thái công việc"
+                  className="grid grid-cols-1 gap-1.5"
+                >
+                  {TASK_STATUSES.map((option) => {
+                    const selected = status === option;
+                    return (
+                      <button
+                        key={option}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        onClick={() => {
+                          setStatus(option);
+                          setProgress((prev) =>
+                            resolveProgressForStatus(prev, option)
+                          );
+                        }}
+                        className={`h-9 px-3 flex items-center gap-2 text-xs rounded-lg border transition-colors cursor-pointer whitespace-nowrap ${
+                          selected
+                            ? 'bg-blue-50 border-blue-600 text-blue-800 font-semibold'
+                            : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        {selected ? (
+                          <Check className="w-3.5 h-3.5 shrink-0 text-blue-600" aria-hidden="true" />
+                        ) : (
+                          <Circle className="w-3.5 h-3.5 shrink-0 text-slate-300" aria-hidden="true" />
+                        )}
+                        <span>{option}</span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           </div>

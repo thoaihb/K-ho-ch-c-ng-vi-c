@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { User } from 'firebase/auth';
+import { CheckCircle2, X } from 'lucide-react';
 import { AttachmentPreviewModal } from './components/AttachmentPreviewModal';
+import { AuditLogView } from './components/AuditLogView';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
 import { DriveView } from './components/DriveView';
 import { FilterToolbar } from './components/FilterToolbar';
@@ -11,6 +13,7 @@ import { MachineDetailModal } from './components/MachineDetailModal';
 import { MachineFormModal } from './components/MachineFormModal';
 import { QuickAddMachineInput } from './components/MachineSelectWithQuickAdd';
 import { MachinesView } from './components/MachinesView';
+import { LoginView } from './components/LoginView';
 import { MaterialFormModal } from './components/MaterialFormModal';
 import { MaterialsView } from './components/MaterialsView';
 import { OvertimeView } from './components/OvertimeView';
@@ -19,6 +22,7 @@ import { SummaryExportView } from './components/SummaryExportView';
 import { SummaryStrip } from './components/SummaryStrip';
 import { TaskFormModal } from './components/TaskFormModal';
 import { TeamModal } from './components/TeamModal';
+import { UserSwitchModal } from './components/UserSwitchModal';
 import { WorkplanTable } from './components/WorkplanTable';
 import {
   clearAccessToken,
@@ -48,6 +52,9 @@ import {
 import {
   AppSection,
   AttachmentItem,
+  AuditAction,
+  AuditLogEntry,
+  AuditTargetType,
   DriveAuthProps,
   IncidentEntry,
   IncidentStatus,
@@ -94,6 +101,12 @@ import {
   resolveProgressForStatus,
   saveToStorage,
 } from './utils/workplan';
+import { ACTIVE_USER_STORAGE_KEY } from './utils/rbac';
+import {
+  AUDIT_STORAGE_KEY,
+  createAuditEntry,
+  loadAuditLogsFromStorage,
+} from './utils/auditLog';
 
 const INITIAL_FILTER: TaskFilter = {
   status: 'all',
@@ -171,6 +184,37 @@ export default function App() {
   const [previewAttachment, setPreviewAttachment] =
     useState<AttachmentItem | null>(null);
 
+  const AUTH_SESSION_KEY = 'automation_auth_session_user_id_v2';
+
+  const [currentUser, setCurrentUser] = useState<TeamMember | null>(() => {
+    const loaded = loadMembersFromStorage(window.localStorage);
+    try {
+      const sessionUserId =
+        window.sessionStorage.getItem(AUTH_SESSION_KEY) ||
+        window.localStorage.getItem(AUTH_SESSION_KEY);
+      if (sessionUserId) {
+        const found = loaded.find((m) => m.id === sessionUserId);
+        if (found && !found.isLocked) {
+          return found;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    // Bắt buộc đăng nhập: Chưa có session thì hiển thị màn hình Login
+    return null;
+  });
+
+  const [isUserSwitchModalOpen, setIsUserSwitchModalOpen] = useState(false);
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(() =>
+    loadAuditLogsFromStorage(window.localStorage)
+  );
+  const [isPushingSupabase, setIsPushingSupabase] = useState(false);
+  const [pushToast, setPushToast] = useState<{
+    message: string;
+    isError?: boolean;
+  } | null>(null);
+
   const [driveUser, setDriveUser] = useState<User | null>(null);
   const [driveAccessToken, setDriveAccessToken] = useState<string | null>(null);
   const [isDriveSigningIn, setIsDriveSigningIn] = useState(false);
@@ -179,16 +223,118 @@ export default function App() {
   const [supabaseError, setSupabaseError] = useState<string | null>(null);
 
   const syncQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const initialSnapshotRef = useRef({
-    members,
-    machines,
-    tasks,
-    overtimeEntries,
-    materials,
-    incidents,
-  });
 
-  const enqueueSupabaseSync = (action: () => Promise<void>) => {
+  const logAudit = (
+    action: AuditAction,
+    targetType: AuditTargetType,
+    targetId: string,
+    targetName: string,
+    details: string,
+    machineCode?: string,
+    machineName?: string
+  ) => {
+    const performer = currentUser ?? {
+      id: 'system',
+      name: 'Hệ thống',
+      username: 'system',
+      role: 'System',
+      isAdmin: true,
+    };
+    const entry = createAuditEntry(
+      performer,
+      action,
+      targetType,
+      targetId,
+      targetName,
+      details,
+      machineCode,
+      machineName
+    );
+    setAuditLogs((prev) => [entry, ...prev]);
+  };
+
+  const handleManualPushSupabase = async () => {
+    setIsPushingSupabase(true);
+    setPushToast(null);
+    try {
+      const result = await pushWorkspaceToSupabase({
+        members,
+        machines,
+        tasks,
+        overtimeEntries,
+        materials,
+        incidents,
+      });
+      logAudit(
+        'export',
+        'system',
+        'supabase-sync',
+        'Đồng bộ Supabase',
+        `Đẩy thành công ${result.totalCount} bản ghi thực tế từ Preview lên Supabase (${result.machinesCount} máy, ${result.tasksCount} công việc, ${result.materialsCount} vật tư, ${result.incidentsCount} sự cố, ${result.overtimeCount} tăng ca, ${result.membersCount} thành viên, ${result.attachmentsCount} file đính kèm)`
+      );
+      setPushToast({
+        message: `Đã đẩy thành công toàn bộ ${result.totalCount} bản ghi thực tế từ Preview lên 7 bảng Supabase (${result.machinesCount} máy, ${result.tasksCount} công việc, ${result.materialsCount} vật tư, ${result.incidentsCount} sự cố, ${result.overtimeCount} tăng ca, ${result.membersCount} thành viên, ${result.attachmentsCount} file).`,
+        isError: false,
+      });
+    } catch (err) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'Lỗi không xác định khi kết nối với Supabase.';
+      setPushToast({
+        message: `Lỗi đẩy dữ liệu lên Supabase: ${msg}`,
+        isError: true,
+      });
+    } finally {
+      setIsPushingSupabase(false);
+    }
+  };
+
+  const handleLoginSuccess = (user: TeamMember, rememberMe: boolean) => {
+    setCurrentUser(user);
+    try {
+      if (rememberMe) {
+        window.localStorage.setItem(AUTH_SESSION_KEY, user.id);
+        window.sessionStorage.removeItem(AUTH_SESSION_KEY);
+      } else {
+        window.sessionStorage.setItem(AUTH_SESSION_KEY, user.id);
+        window.localStorage.removeItem(AUTH_SESSION_KEY);
+      }
+      window.localStorage.setItem(ACTIVE_USER_STORAGE_KEY, user.id);
+    } catch {
+      // ignore
+    }
+    logAudit(
+      'login',
+      'member',
+      user.id,
+      user.name,
+      `Đăng nhập thành công vào hệ thống (@${user.username}) - ${
+        user.isAdmin ? 'Admin cấp cao' : 'Kỹ sư'
+      }`
+    );
+  };
+
+  const handleLogout = () => {
+    if (currentUser) {
+      logAudit(
+        'login',
+        'member',
+        currentUser.id,
+        currentUser.name,
+        `Đăng xuất khỏi hệ thống (@${currentUser.username})`
+      );
+    }
+    try {
+      window.sessionStorage.removeItem(AUTH_SESSION_KEY);
+      window.localStorage.removeItem(AUTH_SESSION_KEY);
+    } catch {
+      // ignore
+    }
+    setCurrentUser(null);
+  };
+
+  const enqueueSupabaseSync = (action: () => Promise<unknown>) => {
     if (!isSupabaseConfigured()) return;
     syncQueueRef.current = syncQueueRef.current
       .then(async () => {
@@ -211,7 +357,7 @@ export default function App() {
         const res = await fetchWorkspaceFromSupabase();
         if (cancelled || !res) return;
         if (res.isEmpty) {
-          await pushWorkspaceToSupabase(initialSnapshotRef.current);
+          // Không tự động nạp dữ liệu mẫu khi database trống theo đúng yêu cầu người dùng
         } else {
           if (res.data.members.length > 0) {
             setMembers(res.data.members);
@@ -314,6 +460,30 @@ export default function App() {
   }, [incidents]);
 
   useEffect(() => {
+    const res = saveToStorage(
+      window.localStorage,
+      AUDIT_STORAGE_KEY,
+      auditLogs
+    );
+    if (!res.ok) {
+      setStorageError(res.error ?? null);
+    }
+  }, [auditLogs]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    try {
+      window.localStorage.setItem(ACTIVE_USER_STORAGE_KEY, currentUser.id);
+    } catch {
+      // ignore
+    }
+    const latest = members.find((m) => m.id === currentUser.id);
+    if (latest && JSON.stringify(latest) !== JSON.stringify(currentUser)) {
+      setCurrentUser(latest);
+    }
+  }, [currentUser, members]);
+
+  useEffect(() => {
     try {
       window.localStorage.setItem(
         SIDEBAR_COLLAPSED_KEY,
@@ -348,6 +518,15 @@ export default function App() {
       updatedAt: getTodayIsoDate(),
     };
     setMachines((prev) => [created, ...prev]);
+    logAudit(
+      'create',
+      'machine',
+      created.id,
+      created.name,
+      `Tạo nhanh máy/dự án mới: "${created.name}" (Mã: ${created.code})`,
+      created.code,
+      created.name
+    );
     enqueueSupabaseSync(() => syncUpsertMachine(created));
     return created;
   };
@@ -422,6 +601,16 @@ export default function App() {
         );
       }
 
+      logAudit(
+        'update',
+        'machine',
+        existingId,
+        data.name,
+        `Cập nhật thông tin máy "${data.name}": Mã ${data.code}, Trạng thái: ${data.status}`,
+        data.code,
+        data.name
+      );
+
       enqueueSupabaseSync(async () => {
         await syncUpsertMachine(updatedMachine);
         for (const t of renamedTasks) await syncUpsertTask(t);
@@ -435,6 +624,15 @@ export default function App() {
         updatedAt: today,
       };
       setMachines((prev) => [created, ...prev]);
+      logAudit(
+        'create',
+        'machine',
+        created.id,
+        created.name,
+        `Thêm mới máy "${created.name}" (Mã: ${created.code}, Trạng thái: ${created.status})`,
+        created.code,
+        created.name
+      );
       enqueueSupabaseSync(() => syncUpsertMachine(created));
     }
     setIsMachineModalOpen(false);
@@ -448,6 +646,15 @@ export default function App() {
       prev.map((m) => (m.id === id ? { ...m, status, updatedAt: today } : m))
     );
     if (target) {
+      logAudit(
+        'status_change',
+        'machine',
+        target.id,
+        target.name,
+        `Chuyển trạng thái máy từ "${target.status}" -> "${status}"`,
+        target.code,
+        target.name
+      );
       enqueueSupabaseSync(() =>
         syncUpsertMachine({ ...target, status, updatedAt: today })
       );
@@ -455,6 +662,18 @@ export default function App() {
   };
 
   const handleDeleteMachine = (id: string) => {
+    const target = machines.find((m) => m.id === id);
+    if (target) {
+      logAudit(
+        'delete',
+        'machine',
+        target.id,
+        target.name,
+        `Xóa máy "${target.name}" khỏi danh mục`,
+        target.code,
+        target.name
+      );
+    }
     setMachines((prev) => prev.filter((m) => m.id !== id));
     if (detailMachineId === id) {
       setDetailMachineId(null);
@@ -546,10 +765,46 @@ export default function App() {
     taskData: Omit<WorkTask, 'id'>,
     existingId?: string
   ) => {
+    const machine = machines.find(
+      (m) => m.id === taskData.machineId || m.name === taskData.mainContent
+    );
     if (existingId) {
+      const previous = tasks.find((t) => t.id === existingId);
       const updated: WorkTask = { ...taskData, id: existingId };
       setTasks((prev) =>
         prev.map((item) => (item.id === existingId ? updated : item))
+      );
+
+      const diffs: string[] = [];
+      if (previous) {
+        if (previous.status !== taskData.status) {
+          diffs.push(`Trạng thái: "${previous.status}" -> "${taskData.status}"`);
+        }
+        if (previous.progress !== taskData.progress) {
+          diffs.push(`Tiến độ: ${previous.progress}% -> ${taskData.progress}%`);
+        }
+        if (previous.targetDate !== taskData.targetDate) {
+          diffs.push(`Kế hoạch: ${previous.targetDate} -> ${taskData.targetDate}`);
+        }
+        const prevAssignees = previous.assigneeIds || (previous.assigneeId ? [previous.assigneeId] : []);
+        const nextAssignees = taskData.assigneeIds || (taskData.assigneeId ? [taskData.assigneeId] : []);
+        if (JSON.stringify(prevAssignees) !== JSON.stringify(nextAssignees)) {
+          diffs.push(`Phân công: ${nextAssignees.length} thành viên phụ trách`);
+        }
+      }
+      const details =
+        diffs.length > 0
+          ? diffs.join(', ')
+          : `Cập nhật nội dung chi tiết công việc "${taskData.mainContent}"`;
+
+      logAudit(
+        'update',
+        'task',
+        existingId,
+        taskData.mainContent,
+        details,
+        machine?.code,
+        machine?.name
       );
       enqueueSupabaseSync(() => syncUpsertTask(updated));
     } else {
@@ -558,6 +813,15 @@ export default function App() {
         id: createTaskId(),
       };
       setTasks((prev) => [created, ...prev]);
+      logAudit(
+        'create',
+        'task',
+        created.id,
+        created.mainContent,
+        `Tạo công việc mới: "${created.mainContent}" (Hạn: ${created.targetDate}, Tiến độ: ${created.progress}%)`,
+        machine?.code,
+        machine?.name
+      );
       enqueueSupabaseSync(() => syncUpsertTask(created));
     }
     setIsTaskModalOpen(false);
@@ -579,6 +843,18 @@ export default function App() {
       )
     );
     if (target) {
+      const machine = machines.find(
+        (m) => m.id === target.machineId || m.name === target.mainContent
+      );
+      logAudit(
+        'status_change',
+        'task',
+        target.id,
+        target.mainContent,
+        `Cập nhật trạng thái từ "${target.status}" -> "${status}"`,
+        machine?.code,
+        machine?.name
+      );
       enqueueSupabaseSync(() =>
         syncUpsertTask({
           ...target,
@@ -598,6 +874,18 @@ export default function App() {
       )
     );
     if (target) {
+      const machine = machines.find(
+        (m) => m.id === target.machineId || m.name === target.mainContent
+      );
+      logAudit(
+        'progress_update',
+        'task',
+        target.id,
+        target.mainContent,
+        `Cập nhật tiến độ từ ${target.progress}% -> ${clamped}%`,
+        machine?.code,
+        machine?.name
+      );
       enqueueSupabaseSync(() =>
         syncUpsertTask({ ...target, progress: clamped })
       );
@@ -605,6 +893,21 @@ export default function App() {
   };
 
   const handleConfirmDelete = (taskId: string) => {
+    const target = tasks.find((t) => t.id === taskId);
+    if (target) {
+      const machine = machines.find(
+        (m) => m.id === target.machineId || m.name === target.mainContent
+      );
+      logAudit(
+        'delete',
+        'task',
+        target.id,
+        target.mainContent,
+        `Xóa công việc "${target.mainContent}"`,
+        machine?.code,
+        machine?.name
+      );
+    }
     setTasks((prev) => prev.filter((task) => task.id !== taskId));
     setDeletingTask(null);
     enqueueSupabaseSync(() => syncDeleteTask(taskId));
@@ -613,6 +916,13 @@ export default function App() {
   const handleUpdateMembers = (nextMembers: TeamMember[]) => {
     const previousMembers = members;
     setMembers(nextMembers);
+    logAudit(
+      'permission_change',
+      'member',
+      'team-update',
+      'Thành viên & Phân quyền',
+      `Cập nhật danh sách tài khoản và ma trận phân quyền (${nextMembers.length} thành viên)`
+    );
     const validIds = new Set(nextMembers.map((m) => m.id));
     if (filter.assigneeId !== 'all' && !validIds.has(filter.assigneeId)) {
       setFilter((prev) => ({ ...prev, assigneeId: 'all' }));
@@ -635,6 +945,13 @@ export default function App() {
       createdAt: getTodayIsoDate(),
     };
     setOvertimeEntries((prev) => [created, ...prev]);
+    logAudit(
+      'create',
+      'overtime',
+      created.id,
+      created.content,
+      `Báo giờ tăng ca ngày ${created.date}: ${created.hours}h (${created.dayType}) - ${created.content}`
+    );
     enqueueSupabaseSync(() => syncUpsertOvertime(created));
   };
 
@@ -647,11 +964,28 @@ export default function App() {
       prev.map((entry) => (entry.id === id ? { ...entry, ...data } : entry))
     );
     if (existing) {
+      logAudit(
+        'update',
+        'overtime',
+        id,
+        data.content,
+        `Cập nhật giờ tăng ca: ${data.hours}h (${data.dayType}) - ${data.content}`
+      );
       enqueueSupabaseSync(() => syncUpsertOvertime({ ...existing, ...data }));
     }
   };
 
   const handleDeleteOvertime = (id: string) => {
+    const target = overtimeEntries.find((e) => e.id === id);
+    if (target) {
+      logAudit(
+        'delete',
+        'overtime',
+        id,
+        target.content,
+        `Xóa bản ghi tăng ca ngày ${target.date} (${target.hours}h)`
+      );
+    }
     setOvertimeEntries((prev) => prev.filter((entry) => entry.id !== id));
     enqueueSupabaseSync(() => syncDeleteOvertime(id));
   };
@@ -666,6 +1000,13 @@ export default function App() {
       setMaterials((prev) =>
         prev.map((item) => (item.id === existingId ? updated : item))
       );
+      logAudit(
+        'update',
+        'material',
+        existingId,
+        data.name,
+        `Cập nhật vật tư "${data.name}" (${data.specCode || 'N/A'}): SL ${data.quantity}, Trạng thái: ${data.status}`
+      );
       enqueueSupabaseSync(() => syncUpsertMaterial(updated));
     } else {
       const created: MaterialItem = {
@@ -674,6 +1015,13 @@ export default function App() {
         updatedAt: today,
       };
       setMaterials((prev) => [created, ...prev]);
+      logAudit(
+        'create',
+        'material',
+        created.id,
+        created.name,
+        `Thêm vật tư mới "${created.name}" (${created.specCode || 'N/A'}): SL ${created.quantity}`
+      );
       enqueueSupabaseSync(() => syncUpsertMaterial(created));
     }
     setIsMaterialModalOpen(false);
@@ -690,6 +1038,13 @@ export default function App() {
       )
     );
     if (target) {
+      logAudit(
+        'status_change',
+        'material',
+        target.id,
+        target.name,
+        `Đổi trạng thái vật tư "${target.name}" từ "${target.status}" -> "${status}"`
+      );
       enqueueSupabaseSync(() =>
         syncUpsertMaterial({ ...target, status, updatedAt: today })
       );
@@ -697,6 +1052,16 @@ export default function App() {
   };
 
   const handleDeleteMaterial = (id: string) => {
+    const target = materials.find((item) => item.id === id);
+    if (target) {
+      logAudit(
+        'delete',
+        'material',
+        id,
+        target.name,
+        `Xóa vật tư "${target.name}" khỏi danh sách BOM`
+      );
+    }
     setMaterials((prev) => prev.filter((item) => item.id !== id));
     enqueueSupabaseSync(() => syncDeleteMaterial(id));
   };
@@ -710,6 +1075,13 @@ export default function App() {
       setIncidents((prev) =>
         prev.map((entry) => (entry.id === existingId ? updated : entry))
       );
+      logAudit(
+        'update',
+        'incident',
+        existingId,
+        data.machineName,
+        `Cập nhật sự cố máy "${data.machineName}": Trạng thái ${data.status}`
+      );
       enqueueSupabaseSync(() => syncUpsertIncident(updated));
     } else {
       const created: IncidentEntry = {
@@ -717,6 +1089,13 @@ export default function App() {
         id: createIncidentId(),
       };
       setIncidents((prev) => [created, ...prev]);
+      logAudit(
+        'create',
+        'incident',
+        created.id,
+        created.machineName,
+        `Báo cáo sự cố mới máy "${created.machineName}": ${created.description}`
+      );
       enqueueSupabaseSync(() => syncUpsertIncident(created));
     }
     setIsIncidentModalOpen(false);
@@ -730,11 +1109,28 @@ export default function App() {
       prev.map((entry) => (entry.id === id ? { ...entry, status } : entry))
     );
     if (target) {
+      logAudit(
+        'status_change',
+        'incident',
+        target.id,
+        target.machineName,
+        `Đổi trạng thái sự cố máy "${target.machineName}" từ "${target.status}" -> "${status}"`
+      );
       enqueueSupabaseSync(() => syncUpsertIncident({ ...target, status }));
     }
   };
 
   const handleDeleteIncident = (id: string) => {
+    const target = incidents.find((entry) => entry.id === id);
+    if (target) {
+      logAudit(
+        'delete',
+        'incident',
+        id,
+        target.machineName,
+        `Xóa nhật ký sự cố máy "${target.machineName}"`
+      );
+    }
     setIncidents((prev) => prev.filter((entry) => entry.id !== id));
     enqueueSupabaseSync(() => syncDeleteIncident(id));
   };
@@ -756,8 +1152,19 @@ export default function App() {
     if (payload.incidents) {
       setIncidents(payload.incidents);
     }
+    if (payload.auditLogs) {
+      setAuditLogs(payload.auditLogs);
+    }
     setDetailMachineId(null);
     setFilter(INITIAL_FILTER);
+
+    logAudit(
+      'import',
+      'system',
+      'backup-restore',
+      'Phục hồi dữ liệu',
+      `Khôi phục không gian làm việc từ bản sao lưu (${payload.tasks.length} công việc, ${nextMachines.length} máy)`
+    );
 
     enqueueSupabaseSync(() =>
       pushWorkspaceToSupabase({
@@ -789,7 +1196,7 @@ export default function App() {
   };
 
   const handlePushSupabase = async (): Promise<string> => {
-    await pushWorkspaceToSupabase({
+    const res = await pushWorkspaceToSupabase({
       members,
       machines,
       tasks,
@@ -798,8 +1205,19 @@ export default function App() {
       incidents,
     });
     setSupabaseError(null);
-    return `Đã đồng bộ toàn bộ lên Supabase (${machines.length} máy, ${tasks.length} công việc, ${overtimeEntries.length} tăng ca, ${materials.length} vật tư, ${incidents.length} sự cố, ${members.length} thành viên).`;
+    logAudit(
+      'export',
+      'system',
+      'supabase-push',
+      'Đồng bộ Supabase',
+      `Đẩy toàn bộ ${res.totalCount} bản ghi thực tế lên Supabase (${res.machinesCount} máy, ${res.tasksCount} task, ${res.materialsCount} vật tư, ${res.incidentsCount} sự cố, ${res.overtimeCount} tăng ca, ${res.membersCount} user, ${res.attachmentsCount} file)`
+    );
+    return `Đã đồng bộ toàn bộ ${res.totalCount} bản ghi lên Supabase (${res.machinesCount} máy, ${res.tasksCount} công việc, ${res.materialsCount} vật tư, ${res.incidentsCount} sự cố, ${res.overtimeCount} tăng ca, ${res.membersCount} thành viên, ${res.attachmentsCount} file).`;
   };
+
+  if (!currentUser) {
+    return <LoginView members={members} onLogin={handleLoginSuccess} />;
+  }
 
   return (
     <div className="min-h-screen flex bg-slate-50 text-slate-900">
@@ -808,10 +1226,13 @@ export default function App() {
         isCollapsed={isSidebarCollapsed}
         isMobileOpen={isMobileMenuOpen}
         memberCount={members.length}
+        currentUser={currentUser}
         onSelectSection={setActiveSection}
         onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
         onCloseMobile={() => setIsMobileMenuOpen(false)}
         onOpenTeamModal={() => setIsTeamModalOpen(true)}
+        onOpenUserSwitchModal={() => setIsUserSwitchModalOpen(true)}
+        onLogout={handleLogout}
       />
 
       <div className="flex-1 min-w-0 flex flex-col">
@@ -819,12 +1240,43 @@ export default function App() {
           activeSection={activeSection}
           memberCount={members.length}
           isDriveConnected={Boolean(driveAccessToken)}
+          currentUser={currentUser}
+          isPushingSupabase={isPushingSupabase}
           onOpenMobileMenu={() => setIsMobileMenuOpen(true)}
           onOpenTeamModal={() => setIsTeamModalOpen(true)}
+          onOpenUserSwitchModal={() => setIsUserSwitchModalOpen(true)}
+          onManualPushSupabase={handleManualPushSupabase}
           onQuickAdd={handleQuickAdd}
+          onLogout={handleLogout}
         />
 
         <main className="flex-1 w-full max-w-[1600px] mx-auto px-4 sm:px-6 py-6 space-y-5">
+          {pushToast && (
+            <div
+              role="alert"
+              className={`rounded-lg px-4 py-3 text-sm flex items-start justify-between gap-3 shadow-xs ${
+                pushToast.isError
+                  ? 'bg-red-50 border border-red-200 text-red-900'
+                  : 'bg-emerald-50 border border-emerald-300 text-emerald-900'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                {!pushToast.isError && (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" aria-hidden="true" />
+                )}
+                <span>{pushToast.message}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPushToast(null)}
+                className="text-slate-400 hover:text-slate-700 cursor-pointer p-0.5"
+                aria-label="Đóng thông báo"
+              >
+                <X className="w-4 h-4" aria-hidden="true" />
+              </button>
+            </div>
+          )}
+
           {storageError && (
             <div
               role="alert"
@@ -882,6 +1334,7 @@ export default function App() {
                 totalTaskCount={tasks.length}
                 members={members}
                 machines={machines}
+                currentUser={currentUser}
                 onStatusChange={handleInlineStatusChange}
                 onProgressChange={handleInlineProgressChange}
                 onEditTask={handleOpenEditModal}
@@ -946,6 +1399,17 @@ export default function App() {
             />
           )}
 
+          {activeSection === 'audit' && (
+            <AuditLogView
+              logs={auditLogs}
+              members={members}
+              machines={machines}
+              currentUser={currentUser}
+            />
+          )}
+
+
+
           {activeSection === 'drive' && (
             <DriveView
               user={driveUser}
@@ -990,6 +1454,7 @@ export default function App() {
         materials={materials}
         incidents={incidents}
         members={members}
+        auditLogs={auditLogs}
         onClose={() => setDetailMachineId(null)}
         onEditMachine={(machine) => {
           setEditingMachine(machine);
@@ -1068,6 +1533,7 @@ export default function App() {
 
       <TeamModal
         isOpen={isTeamModalOpen}
+        currentUser={currentUser}
         members={members}
         onClose={() => setIsTeamModalOpen(false)}
         onUpdateMembers={handleUpdateMembers}
@@ -1082,6 +1548,32 @@ export default function App() {
       <AttachmentPreviewModal
         attachment={previewAttachment}
         onClose={() => setPreviewAttachment(null)}
+      />
+
+      <UserSwitchModal
+        isOpen={isUserSwitchModalOpen}
+        currentUser={currentUser}
+        members={members}
+        onClose={() => setIsUserSwitchModalOpen(false)}
+        onLogout={handleLogout}
+        onSelectUser={(user) => {
+          setCurrentUser(user);
+          try {
+            window.localStorage.setItem(AUTH_SESSION_KEY, user.id);
+            window.localStorage.setItem(ACTIVE_USER_STORAGE_KEY, user.id);
+          } catch {
+            // ignore
+          }
+          logAudit(
+            'login',
+            'member',
+            user.id,
+            user.name,
+            `Đăng nhập/chuyển sang tài khoản ${user.name} (@${user.username}) - ${
+              user.isAdmin ? 'Admin cấp cao' : 'Kỹ sư'
+            }`
+          );
+        }}
       />
     </div>
   );

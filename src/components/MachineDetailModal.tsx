@@ -1,6 +1,8 @@
 import { useEffect, useMemo } from 'react';
 import {
   ClipboardList,
+  Clock,
+  History,
   Package,
   Paperclip,
   Pencil,
@@ -10,12 +12,14 @@ import {
 } from 'lucide-react';
 import {
   AttachmentItem,
+  AuditLogEntry,
   IncidentEntry,
   MachineProject,
   MaterialItem,
   TeamMember,
   WorkTask,
 } from '../types/workplan';
+import { AUDIT_ACTION_LABELS } from '../utils/auditLog';
 import { computeMachineProfile } from '../utils/machines';
 import { clampProgress, formatDateVi, formatFileSize } from '../utils/workplan';
 
@@ -25,6 +29,7 @@ interface MachineDetailModalProps {
   materials: MaterialItem[];
   incidents: IncidentEntry[];
   members: TeamMember[];
+  auditLogs?: AuditLogEntry[];
   onClose: () => void;
   onEditMachine: (machine: MachineProject) => void;
   onQuickAddTask: (machine: MachineProject) => void;
@@ -64,6 +69,7 @@ export function MachineDetailModal({
   materials,
   incidents,
   members,
+  auditLogs = [],
   onClose,
   onEditMachine,
   onQuickAddTask,
@@ -92,6 +98,17 @@ export function MachineDetailModal({
         : null,
     [machine, tasks, materials, incidents]
   );
+
+  const machineLogs = useMemo(() => {
+    if (!machine) return [];
+    return auditLogs.filter(
+      (l) =>
+        l.machineCode === machine.code ||
+        l.targetId === machine.id ||
+        l.machineName === machine.name ||
+        l.targetName === machine.name
+    );
+  }, [machine, auditLogs]);
 
   if (!machine || !profile) return null;
 
@@ -492,6 +509,76 @@ export function MachineDetailModal({
                         </tr>
                       );
                     })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          {/* Section 4: Machine Audit Logs */}
+          <section
+            aria-label="Lịch sử thay đổi của máy"
+            className="bg-white border border-slate-200 rounded-lg p-4 sm:p-5 space-y-3"
+          >
+            <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+              <div className="flex items-center gap-2">
+                <span className="w-6 h-6 rounded bg-purple-50 text-purple-700 font-bold text-xs flex items-center justify-center shrink-0">
+                  4
+                </span>
+                <h4 className="text-sm font-bold text-slate-900">
+                  Lịch sử thay đổi của máy
+                </h4>
+                <span className="text-xs font-mono tabular-nums text-slate-500">
+                  ({machineLogs.length} bản ghi)
+                </span>
+              </div>
+            </div>
+
+            {machineLogs.length === 0 ? (
+              <p className="text-xs text-slate-500 italic py-3 text-center">
+                Chưa ghi nhận lịch sử thay đổi nào cho máy này.
+              </p>
+            ) : (
+              <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                <table className="w-full border-collapse text-left text-xs">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold">
+                      <th scope="col" className="py-2.5 px-3 w-36 whitespace-nowrap">
+                        Thời gian
+                      </th>
+                      <th scope="col" className="py-2.5 px-3 w-40">
+                        Người thực hiện
+                      </th>
+                      <th scope="col" className="py-2.5 px-3 w-32 whitespace-nowrap">
+                        Hành động
+                      </th>
+                      <th scope="col" className="py-2.5 px-3 min-w-[200px]">
+                        Nội dung chi tiết thay đổi
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {machineLogs.map((log) => (
+                      <tr key={log.id} className="hover:bg-slate-50/70">
+                        <td className="py-2.5 px-3 font-mono text-slate-600 whitespace-nowrap">
+                          {log.formattedTime}
+                        </td>
+                        <td className="py-2.5 px-3 font-medium text-slate-800">
+                          {log.userName}
+                          <span className="text-[10px] text-slate-400 font-mono block">
+                            @{log.userUsername}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          <span className="inline-block px-1.5 py-0.5 text-[10px] font-semibold rounded bg-slate-100 text-slate-700 border border-slate-200">
+                            {AUDIT_ACTION_LABELS[log.action] ?? log.action}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 font-mono text-slate-700">
+                          {log.details}
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>

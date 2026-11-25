@@ -18,6 +18,7 @@ import {
   WorkTask,
 } from '../types/workplan';
 import { findMachineForRecord } from '../utils/machines';
+import { getDefaultMemberPermissions, normalizeTeamMember } from '../utils/rbac';
 import { clampProgress, getTodayIsoDate } from '../utils/workplan';
 import { formatSupabaseError, getSupabaseClient } from './supabaseClient';
 
@@ -139,11 +140,19 @@ export function sanitizeSafeDataUrl(url?: string | null): string | undefined {
   return undefined;
 }
 
-export function mapMemberFromRow(row: TeamMemberRow): TeamMember {
+export function mapMemberFromRow(row: TeamMemberRow, index = 0): TeamMember {
+  const normalized = normalizeTeamMember(row, index);
+  if (normalized) return normalized;
   return {
     id: row.id,
     name: row.name,
     role: row.role || 'Kỹ sư Tự động hóa',
+    username: row.id,
+    password: '123',
+    isAdmin: false,
+    isLocked: false,
+    avatarColor: '#2563EB',
+    permissions: getDefaultMemberPermissions(),
   };
 }
 
@@ -893,11 +902,32 @@ export function buildSupabaseInsertSql(snapshot: WorkspaceSnapshot): string {
   return sections.join('\n');
 }
 
+export interface PushWorkspaceResult {
+  membersCount: number;
+  machinesCount: number;
+  tasksCount: number;
+  overtimeCount: number;
+  materialsCount: number;
+  incidentsCount: number;
+  attachmentsCount: number;
+  totalCount: number;
+}
+
 export async function pushWorkspaceToSupabase(
   snapshot: WorkspaceSnapshot
-): Promise<void> {
+): Promise<PushWorkspaceResult> {
   const client = getSupabaseClient();
-  if (!client) return;
+  const emptyResult: PushWorkspaceResult = {
+    membersCount: 0,
+    machinesCount: 0,
+    tasksCount: 0,
+    overtimeCount: 0,
+    materialsCount: 0,
+    incidentsCount: 0,
+    attachmentsCount: 0,
+    totalCount: 0,
+  };
+  if (!client) return emptyResult;
 
   const prepared = prepareNormalizedSupabaseRows(snapshot);
 
@@ -963,6 +993,33 @@ export async function pushWorkspaceToSupabase(
       throw new Error(formatSupabaseError(error, 'Lỗi đồng bộ file đính kèm'));
     }
   }
+
+  const membersCount = prepared.members.length;
+  const machinesCount = prepared.machines.length;
+  const tasksCount = prepared.tasks.length;
+  const overtimeCount = prepared.overtimeEntries.length;
+  const materialsCount = prepared.materials.length;
+  const incidentsCount = prepared.incidents.length;
+  const attachmentsCount = prepared.attachments.length;
+  const totalCount =
+    membersCount +
+    machinesCount +
+    tasksCount +
+    overtimeCount +
+    materialsCount +
+    incidentsCount +
+    attachmentsCount;
+
+  return {
+    membersCount,
+    machinesCount,
+    tasksCount,
+    overtimeCount,
+    materialsCount,
+    incidentsCount,
+    attachmentsCount,
+    totalCount,
+  };
 }
 
 export async function syncSaveAllMembers(

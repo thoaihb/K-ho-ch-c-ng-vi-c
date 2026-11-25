@@ -6,24 +6,29 @@ import {
   ChevronRight,
   ClipboardList,
   Clock,
-  Cloud,
   Cpu,
+  History,
+  LogOut,
   Package,
   Users,
   Wrench,
   X,
 } from 'lucide-react';
-import { AppSection } from '../types/workplan';
+import { AppSection, TeamMember } from '../types/workplan';
+import { getInitials } from '../utils/rbac';
 
 interface SidebarProps {
   activeSection: AppSection;
   isCollapsed: boolean;
   isMobileOpen: boolean;
   memberCount: number;
+  currentUser?: TeamMember | null;
   onSelectSection: (section: AppSection) => void;
   onToggleCollapse: () => void;
   onCloseMobile: () => void;
   onOpenTeamModal: () => void;
+  onOpenUserSwitchModal?: () => void;
+  onLogout?: () => void;
 }
 
 const NAV_ITEMS: Array<{
@@ -36,7 +41,7 @@ const NAV_ITEMS: Array<{
   { id: 'overtime', label: 'Báo giờ tăng ca', icon: Clock },
   { id: 'materials', label: 'Vật tư & Linh kiện', icon: Package },
   { id: 'incidents', label: 'Nhật ký sự cố & Xử lý', icon: Wrench },
-  { id: 'drive', label: 'Google Drive', icon: Cloud },
+  { id: 'audit', label: 'Lịch sử thay đổi', icon: History },
   { id: 'summary', label: 'Tổng hợp & Xuất dữ liệu', icon: BarChart3 },
 ];
 
@@ -45,10 +50,13 @@ export function Sidebar({
   isCollapsed,
   isMobileOpen,
   memberCount,
+  currentUser,
   onSelectSection,
   onToggleCollapse,
   onCloseMobile,
   onOpenTeamModal,
+  onOpenUserSwitchModal,
+  onLogout,
 }: SidebarProps) {
   useEffect(() => {
     if (!isMobileOpen) return;
@@ -149,7 +157,39 @@ export function Sidebar({
           })}
         </nav>
 
-        <div className="p-3 border-t border-slate-800/80 shrink-0">
+        <div className="p-3 border-t border-slate-800/80 shrink-0 space-y-1.5">
+          {currentUser && (
+            <button
+              type="button"
+              onClick={onOpenUserSwitchModal}
+              title={
+                isCollapsed
+                  ? `${currentUser.name} (${currentUser.isAdmin ? 'Admin' : 'Thành viên'}) - Bấm để đổi tài khoản`
+                  : 'Bấm để đổi tài khoản / đăng nhập'
+              }
+              className={`w-full flex items-center gap-2.5 rounded-lg text-xs font-medium bg-slate-800/50 hover:bg-slate-800 text-slate-200 border border-slate-700/60 transition-colors cursor-pointer whitespace-nowrap ${
+                isCollapsed ? 'justify-center p-2' : 'px-2.5 py-2'
+              }`}
+            >
+              <span
+                className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0 shadow-xs"
+                style={{ backgroundColor: currentUser.avatarColor || '#2563EB' }}
+              >
+                {getInitials(currentUser.name)}
+              </span>
+              {!isCollapsed && (
+                <div className="flex-1 text-left min-w-0">
+                  <div className="font-semibold text-white truncate text-xs">
+                    {currentUser.name}
+                  </div>
+                  <div className="text-[10px] text-cyan-400 font-mono truncate">
+                    {currentUser.isAdmin ? '● Admin cấp cao' : `● @${currentUser.username || 'member'}`}
+                  </div>
+                </div>
+              )}
+            </button>
+          )}
+
           <button
             type="button"
             onClick={onOpenTeamModal}
@@ -176,6 +216,20 @@ export function Sidebar({
               </span>
             )}
           </button>
+
+          {currentUser && onLogout && (
+            <button
+              type="button"
+              onClick={onLogout}
+              title={isCollapsed ? 'Đăng xuất khỏi hệ thống' : undefined}
+              className={`w-full flex items-center gap-2.5 rounded-lg text-xs font-medium text-slate-400 hover:text-rose-300 hover:bg-rose-950/30 transition-colors cursor-pointer whitespace-nowrap ${
+                isCollapsed ? 'justify-center p-2' : 'px-3 py-2'
+              }`}
+            >
+              <LogOut className="w-3.5 h-3.5 text-rose-400 shrink-0" aria-hidden="true" />
+              {!isCollapsed && <span>Đăng xuất</span>}
+            </button>
+          )}
         </div>
       </aside>
 
@@ -243,7 +297,33 @@ export function Sidebar({
               })}
             </nav>
 
-            <div className="p-3 border-t border-slate-800/80">
+            <div className="p-3 border-t border-slate-800/80 space-y-2">
+              {currentUser && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onCloseMobile();
+                    onOpenUserSwitchModal?.();
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-slate-200 bg-slate-800/50 hover:bg-slate-800 rounded-lg border border-slate-700/60 cursor-pointer"
+                >
+                  <span
+                    className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0 shadow-xs"
+                    style={{ backgroundColor: currentUser.avatarColor || '#2563EB' }}
+                  >
+                    {getInitials(currentUser.name)}
+                  </span>
+                  <div className="flex-1 text-left min-w-0">
+                    <div className="font-semibold text-white truncate text-xs">
+                      {currentUser.name}
+                    </div>
+                    <div className="text-[10px] text-cyan-400 font-mono truncate">
+                      {currentUser.isAdmin ? '● Admin cấp cao' : `● @${currentUser.username || 'member'}`}
+                    </div>
+                  </div>
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => {
@@ -263,6 +343,20 @@ export function Sidebar({
                   ({memberCount})
                 </span>
               </button>
+
+              {currentUser && onLogout && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onCloseMobile();
+                    onLogout();
+                  }}
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium text-rose-300 bg-rose-950/40 hover:bg-rose-900/60 rounded-lg border border-rose-800/60 cursor-pointer transition-colors"
+                >
+                  <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Đăng xuất khỏi hệ thống</span>
+                </button>
+              )}
             </div>
           </aside>
         </div>

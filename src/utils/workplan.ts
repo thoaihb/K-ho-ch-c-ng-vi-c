@@ -6,20 +6,93 @@ import {
   TaskFilter,
   TaskStatus,
   TeamMember,
+  UserPermissions,
   WorkTask,
 } from '../types/workplan';
 import { matchesMachineFilter } from './machines';
+import {
+  getDefaultAdminPermissions,
+  getDefaultMemberPermissions,
+  normalizeTeamMember,
+  slugifyUsername,
+} from './rbac';
 
 export const TASKS_STORAGE_KEY = 'automation_team_workplan_tasks_v1';
 export const MEMBERS_STORAGE_KEY = 'automation_team_workplan_members_v1';
 
 export const DEFAULT_TEAM_MEMBERS: TeamMember[] = [
-  { id: 'mem-1', name: 'Nguyễn Minh Tuấn', role: 'Trưởng nhóm PLC' },
-  { id: 'mem-2', name: 'Trần Thị Thu Hà', role: 'Kỹ sư SCADA / HMI' },
-  { id: 'mem-3', name: 'Lê Hoàng Nam', role: 'Kỹ sư Robot & Thị giác máy' },
-  { id: 'mem-4', name: 'Phạm Quốc Bảo', role: 'Kỹ sư Điện & Tủ điều khiển' },
-  { id: 'mem-5', name: 'Võ Ngọc Linh', role: 'Kỹ sư Kiểm thử FAT / SAT' },
-  { id: 'mem-6', name: 'Đặng Hữu Phước', role: 'Kỹ sư Tích hợp IIoT' },
+  {
+    id: 'mem-1',
+    name: 'Nguyễn Minh Tuấn',
+    role: 'Trưởng nhóm PLC',
+    username: 'admin',
+    password: '123',
+    email: 'admin@automation.vn',
+    isAdmin: true,
+    isLocked: false,
+    avatarColor: '#2563EB',
+    permissions: getDefaultAdminPermissions(),
+  },
+  {
+    id: 'mem-2',
+    name: 'Trần Thị Thu Hà',
+    role: 'Kỹ sư SCADA / HMI',
+    username: 'ha.tran',
+    password: '123',
+    email: 'ha.tran@automation.vn',
+    isAdmin: false,
+    isLocked: false,
+    avatarColor: '#0D9488',
+    permissions: getDefaultMemberPermissions(),
+  },
+  {
+    id: 'mem-3',
+    name: 'Lê Hoàng Nam',
+    role: 'Kỹ sư Robot & Thị giác máy',
+    username: 'nam.le',
+    password: '123',
+    email: 'nam.le@automation.vn',
+    isAdmin: false,
+    isLocked: false,
+    avatarColor: '#D97706',
+    permissions: getDefaultMemberPermissions(),
+  },
+  {
+    id: 'mem-4',
+    name: 'Phạm Quốc Bảo',
+    role: 'Kỹ sư Điện & Tủ điều khiển',
+    username: 'bao.pham',
+    password: '123',
+    email: 'bao.pham@automation.vn',
+    isAdmin: false,
+    isLocked: false,
+    avatarColor: '#7C3AED',
+    permissions: getDefaultMemberPermissions(),
+  },
+  {
+    id: 'mem-5',
+    name: 'Võ Ngọc Linh',
+    role: 'Kỹ sư Kiểm thử FAT / SAT',
+    username: 'linh.vo',
+    password: '123',
+    email: 'linh.vo@automation.vn',
+    isAdmin: false,
+    isLocked: false,
+    avatarColor: '#DB2777',
+    permissions: getDefaultMemberPermissions(),
+  },
+  {
+    id: 'mem-6',
+    name: 'Đặng Hữu Phước',
+    role: 'Kỹ sư Tích hợp IIoT',
+    username: 'phuoc.dang',
+    password: '123',
+    email: 'phuoc.dang@automation.vn',
+    isAdmin: false,
+    isLocked: false,
+    avatarColor: '#059669',
+    permissions: getDefaultMemberPermissions(),
+  },
 ];
 
 export const DEFAULT_WORK_TASKS: WorkTask[] = [
@@ -186,8 +259,16 @@ export function filterTasks(
     if (filter.status !== 'all' && task.status !== filter.status) {
       return false;
     }
-    if (filter.assigneeId !== 'all' && task.assigneeId !== filter.assigneeId) {
-      return false;
+    if (filter.assigneeId !== 'all') {
+      const assignedIds =
+        Array.isArray(task.assigneeIds) && task.assigneeIds.length > 0
+          ? task.assigneeIds
+          : task.assigneeId
+          ? [task.assigneeId]
+          : [];
+      if (!assignedIds.includes(filter.assigneeId)) {
+        return false;
+      }
     }
     if (
       filter.machineId &&
@@ -202,12 +283,21 @@ export function filterTasks(
       return false;
     }
     if (normalizedQuery) {
-      const assigneeName = memberNameMap.get(task.assigneeId) ?? '';
+      const assignedIds =
+        Array.isArray(task.assigneeIds) && task.assigneeIds.length > 0
+          ? task.assigneeIds
+          : task.assigneeId
+          ? [task.assigneeId]
+          : [];
+      const assigneeNames = assignedIds
+        .map((id) => memberNameMap.get(id) ?? '')
+        .filter(Boolean)
+        .join(' ');
       const haystack = [
         task.mainContent,
         task.detailContent,
         task.notes,
-        assigneeName,
+        assigneeNames,
         ...task.attachments.map((att) => att.name),
       ]
         .join(' ')
@@ -278,7 +368,14 @@ export function addTeamMember(
   members: TeamMember[],
   name: string,
   role: string,
-  idGenerator: () => string = () => `mem-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  idGenerator: () => string = () => `mem-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+  extraProps?: {
+    username?: string;
+    password?: string;
+    email?: string;
+    isAdmin?: boolean;
+    permissions?: Partial<UserPermissions>;
+  }
 ): AddMemberResult {
   const trimmedName = name.trim();
   const trimmedRole = role.trim() || 'Kỹ sư Tự động hóa';
@@ -308,15 +405,42 @@ export function addTeamMember(
     };
   }
 
-  const nextMember: TeamMember = {
-    id: idGenerator(),
-    name: trimmedName,
-    role: trimmedRole,
-  };
+  const id = idGenerator();
+  const username =
+    extraProps?.username?.trim() || slugifyUsername(trimmedName, id);
+  const existsUsername = members.some(
+    (m) => m.username?.toLowerCase() === username.toLowerCase()
+  );
+  if (existsUsername) {
+    return {
+      ok: false,
+      members,
+      error: 'Tên đăng nhập này đã tồn tại trong nhóm.',
+    };
+  }
+
+  const nextMember = normalizeTeamMember(
+    {
+      id,
+      name: trimmedName,
+      role: trimmedRole,
+      username,
+      password: extraProps?.password || '123',
+      email: extraProps?.email || `${username}@automation.vn`,
+      isAdmin: Boolean(extraProps?.isAdmin),
+      isLocked: false,
+      permissions:
+        extraProps?.permissions ??
+        (extraProps?.isAdmin
+          ? getDefaultAdminPermissions()
+          : getDefaultMemberPermissions()),
+    },
+    members.length
+  );
 
   return {
     ok: true,
-    members: [...members, nextMember],
+    members: [...members, nextMember!],
   };
 }
 
@@ -353,7 +477,10 @@ export function loadMembersFromStorage(storage: StorageLike): TeamMember[] {
     if (!Array.isArray(parsed)) {
       return DEFAULT_TEAM_MEMBERS;
     }
-    const valid = parsed.filter(isValidTeamMember).slice(0, MAX_TEAM_MEMBERS);
+    const valid = parsed
+      .map((item, idx) => normalizeTeamMember(item, idx))
+      .filter((m): m is TeamMember => m !== null)
+      .slice(0, MAX_TEAM_MEMBERS);
     return valid.length > 0 ? valid : DEFAULT_TEAM_MEMBERS;
   } catch {
     return DEFAULT_TEAM_MEMBERS;
@@ -375,17 +502,6 @@ export function saveToStorage(
         'Dung lượng lưu trữ trình duyệt (localStorage) đã đầy. Vui lòng xóa bớt file đính kèm dung lượng lớn.',
     };
   }
-}
-
-function isValidTeamMember(item: unknown): item is TeamMember {
-  if (!item || typeof item !== 'object') return false;
-  const candidate = item as Record<string, unknown>;
-  return (
-    typeof candidate.id === 'string' &&
-    typeof candidate.name === 'string' &&
-    candidate.name.trim().length > 0 &&
-    typeof candidate.role === 'string'
-  );
 }
 
 function normalizeStoredTask(item: unknown): WorkTask | null {
@@ -413,6 +529,22 @@ function normalizeStoredTask(item: unknown): WorkTask | null {
       ? 100
       : 0;
 
+  const rawAssigneeIds = Array.isArray(candidate.assigneeIds)
+    ? (candidate.assigneeIds.filter(
+        (id) => typeof id === 'string' && id.trim().length > 0
+      ) as string[])
+    : [];
+  const assigneeIds =
+    rawAssigneeIds.length > 0
+      ? rawAssigneeIds
+      : candidate.assigneeId && typeof candidate.assigneeId === 'string'
+      ? [candidate.assigneeId.trim()]
+      : [];
+  const assigneeId =
+    typeof candidate.assigneeId === 'string' && candidate.assigneeId.trim()
+      ? candidate.assigneeId.trim()
+      : assigneeIds[0] ?? '';
+
   return {
     id: candidate.id,
     createdAt: candidate.createdAt,
@@ -422,7 +554,8 @@ function normalizeStoredTask(item: unknown): WorkTask | null {
     mainContent: candidate.mainContent,
     detailContent: candidate.detailContent,
     targetDate: candidate.targetDate,
-    assigneeId: candidate.assigneeId,
+    assigneeId,
+    assigneeIds,
     status,
     progress,
     attachments: candidate.attachments,

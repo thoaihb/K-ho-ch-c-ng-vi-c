@@ -18,6 +18,7 @@ import {
   saveToStorage,
 } from './workplan';
 import { MAX_TEAM_MEMBERS, TeamMember } from '../types/workplan';
+import { normalizeTeamMember } from './rbac';
 
 test('formatDateVi formats ISO YYYY-MM-DD to Vietnamese DD/MM/YYYY', () => {
   assert.equal(formatDateVi('2026-11-20'), '20/11/2026');
@@ -123,11 +124,16 @@ test('clampProgress and resolveProgressForStatus enforce 0..100 and Hoàn thành
 });
 
 test('addTeamMember enforces max 10 members, rejects empty and duplicate names', () => {
-  let members: TeamMember[] = Array.from({ length: 9 }, (_, idx) => ({
-    id: `m-${idx + 1}`,
-    name: `Thành viên ${idx + 1}`,
-    role: 'Kỹ sư',
-  }));
+  const members: TeamMember[] = Array.from({ length: 9 }, (_, idx) =>
+    normalizeTeamMember(
+      {
+        id: `m-${idx + 1}`,
+        name: `Thành viên ${idx + 1}`,
+        role: 'Kỹ sư',
+      },
+      idx
+    )!
+  );
 
   const emptyRes = addTeamMember(members, '   ', '');
   assert.equal(emptyRes.ok, false);

@@ -18,6 +18,12 @@ import {
 } from '../types/workplan';
 import { findMachineForRecord } from '../utils/machines';
 import { formatDateVi, formatFileSize, isTaskOverdue } from '../utils/workplan';
+import {
+  canDeleteTask,
+  canEditTask,
+  getInitials,
+  getTaskAssignees,
+} from '../utils/rbac';
 import { ProgressControl } from './ProgressControl';
 
 interface WorkplanTableProps {
@@ -25,6 +31,7 @@ interface WorkplanTableProps {
   totalTaskCount: number;
   members: TeamMember[];
   machines: MachineProject[];
+  currentUser?: TeamMember | null;
   onStatusChange: (taskId: string, status: TaskStatus) => void;
   onProgressChange: (taskId: string, progress: number) => void;
   onEditTask: (task: WorkTask) => void;
@@ -53,6 +60,7 @@ export function WorkplanTable({
   totalTaskCount,
   members,
   machines,
+  currentUser,
   onStatusChange,
   onProgressChange,
   onEditTask,
@@ -149,7 +157,9 @@ export function WorkplanTable({
           </thead>
           <tbody className="divide-y divide-slate-200">
             {tasks.map((task, index) => {
-              const assignee = memberMap.get(task.assigneeId);
+              const assignees = getTaskAssignees(task, members);
+              const canEdit = canEditTask(currentUser, task);
+              const canDelete = canDeleteTask(currentUser, task);
               const linkedMachine = findMachineForRecord(
                 machines,
                 task.machineId,
@@ -204,17 +214,58 @@ export function WorkplanTable({
                   </td>
 
                   <td className="py-3 px-2">
-                    {assignee ? (
-                      <div>
-                        <div className="text-[13px] font-medium text-slate-900 leading-snug">
-                          {assignee.name}
-                        </div>
-                        <div className="text-[11px] text-slate-500 leading-snug mt-0.5">
-                          {assignee.role}
+                    {assignees.length === 0 ? (
+                      <span className="text-xs text-slate-400">Chưa phân công</span>
+                    ) : assignees.length === 1 ? (
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0 shadow-xs"
+                          style={{ backgroundColor: assignees[0].avatarColor || '#2563EB' }}
+                          title={`${assignees[0].name} (${assignees[0].role})`}
+                        >
+                          {getInitials(assignees[0].name)}
+                        </span>
+                        <div className="min-w-0">
+                          <div
+                            className="text-[13px] font-medium text-slate-900 leading-snug truncate"
+                            title={assignees[0].name}
+                          >
+                            {assignees[0].name}
+                          </div>
+                          <div className="text-[11px] text-slate-500 leading-snug truncate">
+                            {assignees[0].role}
+                          </div>
                         </div>
                       </div>
                     ) : (
-                      <span className="text-xs text-slate-400">Chưa phân công</span>
+                      <div>
+                        <div className="flex items-center -space-x-1 mb-1">
+                          {assignees.slice(0, 3).map((m) => (
+                            <span
+                              key={m.id}
+                              className="inline-flex w-5 h-5 rounded-full ring-2 ring-white items-center justify-center text-[9px] font-bold text-white shrink-0 shadow-xs"
+                              style={{ backgroundColor: m.avatarColor || '#2563EB' }}
+                              title={`${m.name} (${m.role})`}
+                            >
+                              {getInitials(m.name)}
+                            </span>
+                          ))}
+                          {assignees.length > 3 && (
+                            <span className="inline-flex w-5 h-5 rounded-full ring-2 ring-white bg-slate-200 text-slate-700 text-[9px] font-bold items-center justify-center shrink-0">
+                              +{assignees.length - 3}
+                            </span>
+                          )}
+                        </div>
+                        <div
+                          className="text-[12px] font-medium text-slate-900 leading-tight truncate"
+                          title={assignees.map((m) => `${m.name} (${m.role})`).join(', ')}
+                        >
+                          {assignees.map((m) => m.name).join(', ')}
+                        </div>
+                        <div className="text-[10px] text-blue-600 font-semibold mt-0.5">
+                          {assignees.length} người phụ trách
+                        </div>
+                      </div>
                     )}
                   </td>
 
@@ -231,17 +282,22 @@ export function WorkplanTable({
                             key={status}
                             type="button"
                             role="radio"
+                            disabled={!canEdit}
                             aria-checked={selected}
-                            onClick={() => onStatusChange(task.id, status)}
-                            className={`w-full flex items-center gap-1 px-1.5 py-1 text-[11px] rounded border text-left transition-colors cursor-pointer whitespace-nowrap focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-blue-700 ${getStatusOptionStyle(
-                              status,
-                              selected
-                            )}`}
+                            title={
+                              !canEdit
+                                ? 'Chỉ thành viên được phân công hoặc Quản trị viên mới được đổi trạng thái'
+                                : undefined
+                            }
+                            onClick={() => canEdit && onStatusChange(task.id, status)}
+                            className={`w-full flex items-center gap-1 px-1.5 py-1 text-[11px] rounded border text-left transition-colors whitespace-nowrap focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-blue-700 ${
+                              !canEdit ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'
+                            } ${getStatusOptionStyle(status, selected)}`}
                           >
                             {selected ? (
-                              <Check className="w-3 h-3 shrink-0" aria-hidden="true" />
+                              <Check className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
                             ) : (
-                              <Circle className="w-3 h-3 shrink-0 text-slate-300" aria-hidden="true" />
+                              <Circle className="w-3.5 h-3.5 shrink-0 text-slate-300" aria-hidden="true" />
                             )}
                             <span>{status}</span>
                           </button>
@@ -256,6 +312,7 @@ export function WorkplanTable({
                       taskName={task.mainContent}
                       status={task.status}
                       progress={task.progress}
+                      disabled={!canEdit}
                       isOpen={openProgressTaskId === `desktop-${task.id}`}
                       onToggleOpen={(id) =>
                         setOpenProgressTaskId(id ? `desktop-${id}` : null)
@@ -304,17 +361,37 @@ export function WorkplanTable({
                     <div className="inline-flex items-center justify-end gap-0.5">
                       <button
                         type="button"
-                        onClick={() => onEditTask(task)}
+                        disabled={!canEdit}
+                        onClick={() => canEdit && onEditTask(task)}
+                        title={
+                          !canEdit
+                            ? 'Chỉ thành viên được phân công hoặc Quản trị viên mới có quyền sửa'
+                            : `Sửa "${task.mainContent}"`
+                        }
                         aria-label={`Sửa "${task.mainContent}"`}
-                        className="p-1.5 text-slate-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors cursor-pointer"
+                        className={`p-1.5 rounded-md transition-colors ${
+                          !canEdit
+                            ? 'text-slate-300 cursor-not-allowed'
+                            : 'text-slate-600 hover:text-blue-700 hover:bg-blue-50 cursor-pointer'
+                        }`}
                       >
                         <Pencil className="w-4 h-4" aria-hidden="true" />
                       </button>
                       <button
                         type="button"
-                        onClick={() => onDeleteTask(task)}
+                        disabled={!canDelete}
+                        onClick={() => canDelete && onDeleteTask(task)}
+                        title={
+                          !canDelete
+                            ? 'Chỉ thành viên được phân công hoặc Quản trị viên mới có quyền xóa'
+                            : `Xóa "${task.mainContent}"`
+                        }
                         aria-label={`Xóa "${task.mainContent}"`}
-                        className="p-1.5 text-slate-600 hover:text-red-700 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
+                        className={`p-1.5 rounded-md transition-colors ${
+                          !canDelete
+                            ? 'text-slate-300 cursor-not-allowed'
+                            : 'text-slate-600 hover:text-red-700 hover:bg-red-50 cursor-pointer'
+                        }`}
                       >
                         <Trash2 className="w-4 h-4" aria-hidden="true" />
                       </button>
@@ -330,7 +407,9 @@ export function WorkplanTable({
       {/* Mobile List View (< 768px) */}
       <div className="md:hidden divide-y divide-slate-200">
         {tasks.map((task, index) => {
-          const assignee = memberMap.get(task.assigneeId);
+          const assignees = getTaskAssignees(task, members);
+          const canEdit = canEditTask(currentUser, task);
+          const canDelete = canDeleteTask(currentUser, task);
           const linkedMachine = findMachineForRecord(
             machines,
             task.machineId,
@@ -366,17 +445,37 @@ export function WorkplanTable({
                 <div className="flex items-center gap-1 shrink-0">
                   <button
                     type="button"
-                    onClick={() => onEditTask(task)}
+                    disabled={!canEdit}
+                    onClick={() => canEdit && onEditTask(task)}
+                    title={
+                      !canEdit
+                        ? 'Chỉ thành viên được phân công hoặc Quản trị viên mới có quyền sửa'
+                        : `Sửa "${task.mainContent}"`
+                    }
                     aria-label={`Sửa "${task.mainContent}"`}
-                    className="p-2 text-slate-600 hover:text-blue-700 hover:bg-blue-50 rounded-md"
+                    className={`p-2 rounded-md ${
+                      !canEdit
+                        ? 'text-slate-300 cursor-not-allowed'
+                        : 'text-slate-600 hover:text-blue-700 hover:bg-blue-50 cursor-pointer'
+                    }`}
                   >
                     <Pencil className="w-4 h-4" aria-hidden="true" />
                   </button>
                   <button
                     type="button"
-                    onClick={() => onDeleteTask(task)}
+                    disabled={!canDelete}
+                    onClick={() => canDelete && onDeleteTask(task)}
+                    title={
+                      !canDelete
+                        ? 'Chỉ thành viên được phân công hoặc Quản trị viên mới có quyền xóa'
+                        : `Xóa "${task.mainContent}"`
+                    }
                     aria-label={`Xóa "${task.mainContent}"`}
-                    className="p-2 text-slate-600 hover:text-red-700 hover:bg-red-50 rounded-md"
+                    className={`p-2 rounded-md ${
+                      !canDelete
+                        ? 'text-slate-300 cursor-not-allowed'
+                        : 'text-slate-600 hover:text-red-700 hover:bg-red-50 cursor-pointer'
+                    }`}
                   >
                     <Trash2 className="w-4 h-4" aria-hidden="true" />
                   </button>
@@ -403,9 +502,22 @@ export function WorkplanTable({
                 </div>
                 <div>
                   <span className="text-slate-500 block">Người đảm nhận</span>
-                  <span className="font-medium text-slate-900">
-                    {assignee ? assignee.name : 'Chưa phân công'}
-                  </span>
+                  {assignees.length === 0 ? (
+                    <span className="text-slate-400">Chưa phân công</span>
+                  ) : assignees.length === 1 ? (
+                    <span className="font-medium text-slate-900">
+                      {assignees[0].name}
+                    </span>
+                  ) : (
+                    <div className="min-w-0">
+                      <span className="font-medium text-slate-900 truncate block">
+                        {assignees.map((m) => m.name).join(', ')}
+                      </span>
+                      <span className="text-[10px] text-blue-600 font-medium">
+                        ({assignees.length} người)
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -425,12 +537,17 @@ export function WorkplanTable({
                         key={status}
                         type="button"
                         role="radio"
+                        disabled={!canEdit}
                         aria-checked={selected}
-                        onClick={() => onStatusChange(task.id, status)}
-                        className={`inline-flex items-center gap-1.5 px-2.5 py-2 text-xs rounded border transition-colors whitespace-nowrap ${getStatusOptionStyle(
-                          status,
-                          selected
-                        )}`}
+                        title={
+                          !canEdit
+                            ? 'Chỉ thành viên được phân công hoặc Quản trị viên mới được đổi trạng thái'
+                            : undefined
+                        }
+                        onClick={() => canEdit && onStatusChange(task.id, status)}
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-2 text-xs rounded border transition-colors whitespace-nowrap ${
+                          !canEdit ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'
+                        } ${getStatusOptionStyle(status, selected)}`}
                       >
                         {selected ? (
                           <Check className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
@@ -453,6 +570,7 @@ export function WorkplanTable({
                   taskName={task.mainContent}
                   status={task.status}
                   progress={task.progress}
+                  disabled={!canEdit}
                   isOpen={openProgressTaskId === `mobile-${task.id}`}
                   onToggleOpen={(id) =>
                     setOpenProgressTaskId(id ? `mobile-${id}` : null)
